@@ -127,14 +127,10 @@ export function registerGate(ctx: {
         const len = typeof args.command === 'string' ? args.command.length : 0
         if (len > deps.config.bashNudgeMinCommandBytes) {
           const reason = `context-mode: 这条 bash 命令较长（约 ${len} 字节 > 阈值 ${deps.config.bashNudgeMinCommandBytes}），建议先索引再检索（ctx_index/ctx_search）或改用 run_code 沙箱。`
+          // P0 修复：无审批通道时 ask 按官方 tools/pre-execute 契约降级为 deny（fail-closed），而非放行+警告。
           if (!deps.hasApproval()) {
-            exec.deferContext({
-              id: crypto.randomUUID(),
-              role: 'user',
-              content: [{ type: 'text', text: `${reason}（当前无审批通道，已放行，请自行精简输出。）` }],
-              source: { kind: 'plugin', plugin: 'context-mode' },
-            })
-            return next()
+            reject(reason)
+            return { kind: 'deny', reason: `${reason}（当前无审批通道，ask 已降级为 deny——请先索引再检索，或用 run_code 沙箱。）` }
           }
           return { kind: 'ask', reason }
         }

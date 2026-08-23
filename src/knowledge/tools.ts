@@ -40,11 +40,20 @@ const textSchema = {
   },
 }
 
-export function registerKnowledgeTools(ctx: { tools: { register(def: unknown): unknown } }, deps: KnowledgeToolsDeps) {
+export function registerKnowledgeTools(ctx: { tools: { register(def: unknown): unknown }; get(name: string): unknown }, deps: KnowledgeToolsDeps) {
   const { kdb, config } = deps
   const requireDb = () => {
     if (!kdb) throw new Error('context-mode 知识库未就绪（目录不可写？）')
     return kdb.db
+  }
+  // P1②：模型可调用路径的文件内容读取优先走 ctx.fs（受宿主审批/沙箱/文件治理）；ctx.fs 不可用时 fallback node:fs（fail-open，README 注明旁路边界）。
+  const readFileContents = async (path: string, exec: any): Promise<string> => {
+    const ctxFs = ctx.get('fs') as { resolve?: (p: string, o?: any) => Promise<any>; readText?: (t: any, s?: any) => Promise<string> } | undefined
+    if (ctxFs && typeof ctxFs.resolve === 'function' && typeof ctxFs.readText === 'function') {
+      const target = await ctxFs.resolve(path)
+      if (target != null) return await ctxFs.readText(target, exec?.signal)
+    }
+    return fs.readFileSync(path, 'utf8')
   }
 
   ctx.tools.register(defineTool({
@@ -55,7 +64,7 @@ export function registerKnowledgeTools(ctx: { tools: { register(def: unknown): u
       ttlMs: { type: 'number', description: '覆盖默认 TTL（毫秒）' },
     },
     output: { schema: textSchema, render: (_args: unknown, v: { text: string }) => [{ type: 'text', text: v.text }] as any },
-    async execute(args: { paths: string[]; ttlMs?: number }) {
+    async execute(args: { paths: string[]; ttlMs?: number }, exec: any) {
       const d = requireDb()
       const files = collectFiles(args.paths)
       const ttl = args.ttlMs ?? config.knowledgeBaseTtlMs
@@ -64,7 +73,8 @@ export function registerKnowledgeTools(ctx: { tools: { register(def: unknown): u
       for (const f of files) {
         try {
           deleteByRef(d, f) // replace-on-index：重索引前先删该 ref 旧 chunks，避免 db 随重复索引增长
-          for (const p of chunkMarkdown(fs.readFileSync(f, 'utf8'))) { addChunk(d, f, p.title, p.body, ttl); chunks++; bytes += p.body.length }
+          const src = await readFileContents(f, exec) // P1②：读文件内容走 ctx.fs（优先）/ fallback node:fs
+          for (const p of chunkMarkdown(src)) { addChunk(d, f, p.title, p.body, ttl); chunks++; bytes += p.body.length }
         } catch { /* 单个文件读取失败跳过 */ }
       }
       if (bytes > 0) incMeta(d, 'indexed_bytes', bytes)

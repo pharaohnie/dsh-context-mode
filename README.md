@@ -9,7 +9,7 @@
 | 块 | 工具 | 价值 |
 |---|---|---|
 | **A 知识库** | `ctx_index` / `ctx_search` / `ctx_fetch_and_index` / `ctx_purge` | 本地 `node:sqlite` + FTS5（porter + trigram）+ RRF 合并 + 标题 5x 加权。检索返回命中片段，而非整文件；`ctx_search` 支持 `queries[]` 批量、`sort`(timeline/relevance)、`source`(ref 前缀过滤) |
-| **B 路由强制** | `tools/pre-execute` + `guard` + `systemPrompt.section` | curl/wget/inline-fetch 硬 deny；无界 bash 长命令 ask（无审批通道则放行+警告）；**read 整读门禁**（>阈值→deny+引导到检索）；**ctx_execute* 的 shell 路由默认关**；大输出先索引再检索指引 |
+| **B 路由强制** | `tools/pre-execute` + `guard` + `systemPrompt.section` | curl/wget/inline-fetch 硬 deny；无界 bash 长命令 ask（**无审批通道→deny，fail-closed**）；**read 整读门禁**（>阈值→deny+引导到检索）；**ctx_execute* 的 shell 路由默认关**；大输出先索引再检索指引 |
 | **C 会话连续性** | `agent/session-start` + `sessionQuery` + `agent.inject` | 压缩后自动恢复最近工作状态；subagent 过滤；幂等去重 |
 | **D 沙箱执行** | `ctx_execute` / `ctx_execute_file` / `ctx_batch_execute` | **Think-in-Code**：在 DSH `codeRuntime` 里跑模型写的一段程序，只把 stdout+返回值得回上下文；`ctx_execute_file` 读文件内容作数据、对其跑分析 code（非执行文件本体）；`ctx_batch_execute` 并行多段+自动索引+同轮检索 |
 | **E 会话记忆** | `agent/inbox/inserted` + `agent/turn-stopping` + gate deny | 把用户提示/决策/约束/拒绝方案捕获为可检索 chunk（`memory:*`），跨 compact 可 `ctx_search`；resume 引导「先搜再问」（默认 opt-in 关，B3） |
@@ -49,7 +49,7 @@
 ## 路由强制边界（fail-open）
 
 - `curl`/`wget`/`inline-fetch` 是**确定性洪水**：硬 `deny`，不走 fail-open。
-- 无界 bash 长命令：正常情况下回 `ask`；**若 `ctx.get('approval')` 为 undefined（无审批通道），降级为「放行 + deferContext 警告」**，不阻塞 headless/CI。
+- 无界 bash 长命令：正常情况下回 `ask`；**若 `ctx.get('approval')` 为 undefined（无审批通道），按官方 `tools/pre-execute` 契约降级为 `{kind:'deny'}`（fail-closed）**，并给引导——不再「放行 + deferContext 警告」。
 - 覆盖了 ask 但审批服务存在而通道 `unavailable` 的极端情形：遵循框架 fail-closed，README 明示，不二次降级。
 - 门禁自身异常一律 fail-open（`return next()`），绝不让门禁破坏一次合法工具调用。
 
@@ -88,6 +88,7 @@
 
 > **安全边界（B1，诚实）**：`codeRuntime` 是**资源隔离（非数据沙箱）**；信任姿态与 **bash 同级**（运行的是模型自己写的程序），**不承诺**程序无法读/写宿主文件（worker 用 `new AsyncFunction` 在 worker 主 realm 运行、未清 Node 全局，可经 `process`/`globalThis`/动态 `import('node:fs')` 触达宿主 FS）。默认不注入 `fs`/`writeText` binding、`ctx_execute_file` 只经 `ctx.fs.readText` 读——这是**设计取向（减小攻击面）**，**不是**安全边界。`ctx_execute(shell)` 默认拒绝（`executeAllowShell=false`）。
 > **内存提示（S6）**：`ctx_batch_execute` 并发 N 个会同时占 N 个空环境+heap cap，宿主内存随 N 倍线性增长——`concurrency` 夹 1-8，CI/大并发场景调低 `executeConcurrency`。
+> **文件读取走 ctx.fs（P1②）**：`ctx_execute_file` 与 `ctx_index` 读文件内容都**优先走 `ctx.fs`**（`resolve`+`readText`，受宿主审批/沙箱/文件治理）；宿主未挂载 `ctx.fs` 时 **fallback 原生 `node:fs`**（旁路边界——此时模型可读路径不经文件治理，README 注明；`openKnowledgeDb` 写 `~/.context-mode/` 为插件自有存储，不经 `storageDomain`，属有意为之）。
 
 ## 会话记忆（P1b，默认 opt-in 关）
 

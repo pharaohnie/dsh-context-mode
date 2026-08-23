@@ -42,31 +42,26 @@ function hash(s: string): string {
 
 export interface RunSandboxOpts { signal?: AbortSignal; timeoutMs?: number }
 
-/** 在沙箱里运行一段程序，只回 {text,count}；fail-open（codeRuntime 未挂载/内部异常 → 返回错误文本，不抛）。 */
+/** 在沙箱里运行一段程序，只回 {text,count}。
+ *  基础设施/前提失败（shell 不可用/语言不支持/codeRuntime 未挂载）→ throw（框架视为 isError，P1①）。
+ *  程序自身失败（CodeRunResult.error；run() 不 reject，error 是结果字段）→ 返回错误文本（这是结果而非基础设施异常）。 */
 export async function runSandbox(ctx: { get(name: string): unknown }, code: string, language?: string, opts: RunSandboxOpts = {}): Promise<{ text: string; count: number }> {
   const lang = (language || 'ts').toLowerCase()
-  try {
-    if (lang === 'shell' || lang === 'bash') {
-      const shell = ctx.get('shell') as { run?: (spec: any) => Promise<any> } | undefined
-      if (!shell || typeof shell.run !== 'function') return { text: 'context-mode: shell 不可用（executeAllowShell 需开启且宿主挂载 shell）', count: 0 }
-      const res = await shell.run({ command: code, signal: opts.signal, timeoutMs: opts.timeoutMs || undefined })
-      const out = [res?.stdout, res?.stderr].filter((x) => typeof x === 'string').join('\n')
-      return { text: out, count: 1 }
-    }
-    if (lang !== 'ts' && lang !== 'typescript' && lang !== 'js') {
-      return { text: `context-mode: 不支持语言 ${lang}（当前仅 ts/typescript/js；shell 需开启 executeAllowShell）`, count: 0 }
-    }
-    const rt = ctx.get('codeRuntime') as { run?: (req: any) => Promise<any> } | undefined
-    if (!rt || typeof rt.run !== 'function') return { text: 'context-mode: codeRuntime 未挂载（宿主未提供）', count: 0 }
-    const res = await rt.run({ program: code, bindings: [], signal: opts.signal })
-    if (res?.error) return { text: `context-mode: codeRuntime 失败 [${res.error.kind}] ${res.error.message}`, count: 0 }
-    const logs = Array.isArray(res?.logs) ? res.logs.join('\n') : ''
-    const value = res?.value === undefined ? '' : serializeValue(res.value)
-    const text = [logs, value].filter(Boolean).join('\n')
-    return { text, count: 1 }
-  } catch (e) {
-    return { text: `context-mode: 执行失败 ${(e as Error).message}`, count: 0 }
+  if (lang === 'shell' || lang === 'bash') {
+    const shell = ctx.get('shell') as { run?: (spec: any) => Promise<any> } | undefined
+    if (!shell || typeof shell.run !== 'function') throw new Error('context-mode: shell 不可用（executeAllowShell 需开启且宿主挂载 shell）')
+    const res = await shell.run({ command: code, signal: opts.signal, timeoutMs: opts.timeoutMs || undefined })
+    const out = [res?.stdout, res?.stderr].filter((x) => typeof x === 'string').join('\n')
+    return { text: out, count: 1 }
   }
+  if (lang !== 'ts' && lang !== 'typescript' && lang !== 'js') throw new Error(`context-mode: 不支持语言 ${lang}（当前仅 ts/typescript/js；shell 需开启 executeAllowShell）`)
+  const rt = ctx.get('codeRuntime') as { run?: (req: any) => Promise<any> } | undefined
+  if (!rt || typeof rt.run !== 'function') throw new Error('context-mode: codeRuntime 未挂载（宿主未提供）')
+  const res = await rt.run({ program: code, bindings: [], signal: opts.signal })
+  if (res?.error) return { text: `context-mode: codeRuntime 失败 [${res.error.kind}] ${res.error.message}`, count: 0 }
+  const logs = Array.isArray(res?.logs) ? res.logs.join('\n') : ''
+  const value = res?.value === undefined ? '' : serializeValue(res.value)
+  return { text: [logs, value].filter(Boolean).join('\n'), count: 1 }
 }
 
 export function registerExecuteTools(ctx: { tools: { register(def: unknown): unknown }; get(name: string): unknown }, deps: ExecuteDeps) {
@@ -90,7 +85,7 @@ export function registerExecuteTools(ctx: { tools: { register(def: unknown): unk
     },
     output: { schema: textSchema, render: (_args: unknown, v: { text: string }) => [{ type: 'text', text: v.text }] as any },
     async execute(args: { language?: string; code: string; timeoutMs?: number }, exec: any) {
-      if (!config.executeEnabled) return { text: 'context-mode: ctx_execute 未启用（executeEnabled=false）', count: 0 }
+      if (!config.executeEnabled) throw new Error('context-mode: ctx_execute 未启用（executeEnabled=false）')
       const d = requireDb()
       const res = await runSandbox(ctx, args.code, args.language ?? config.executeDefaultLanguage, { signal: exec?.signal, timeoutMs: args.timeoutMs })
       countRun(d, res.text)
@@ -109,7 +104,7 @@ export function registerExecuteTools(ctx: { tools: { register(def: unknown): unk
     },
     output: { schema: textSchema, render: (_args: unknown, v: { text: string }) => [{ type: 'text', text: v.text }] as any },
     async execute(args: { path: string; language?: string; code?: string; timeoutMs?: number }, exec: any) {
-      if (!config.executeEnabled) return { text: 'context-mode: ctx_execute_file 未启用', count: 0 }
+      if (!config.executeEnabled) throw new Error('context-mode: ctx_execute_file 未启用（executeEnabled=false）')
       const d = requireDb()
       const fs = ctx.get('fs') as { resolve?: (p: string, o?: any) => Promise<any>; readText?: (t: any, s?: any) => Promise<string> } | undefined
       let src: string
@@ -120,7 +115,8 @@ export function registerExecuteTools(ctx: { tools: { register(def: unknown): unk
         if (!fs?.readText) throw new Error('fs.readText 不可用')
         src = await fs.readText(target, exec?.signal)
       } catch (e) {
-        return { text: `context-mode: 读取文件失败 ${(e as Error).message}`, count: 0 } // fail-open
+        if (e instanceof Error && e.message.startsWith('context-mode:')) throw e
+        throw new Error(`context-mode: 读取文件失败 ${(e as Error).message}`) // P1①：前提/基础设施失败 throw（isError），而非成功值
       }
       const code = args.code ?? 'return typeof FILE_SRC === "string" ? FILE_SRC.length : 0'
       const program = `const FILE_SRC = (${JSON.stringify(src)});\n${code}`
@@ -141,7 +137,7 @@ export function registerExecuteTools(ctx: { tools: { register(def: unknown): unk
     },
     output: { schema: textSchema, render: (_args: unknown, v: { text: string }) => [{ type: 'text', text: v.text }] as any },
     async execute(args: { commands: string[]; queries?: string[]; language?: string; concurrency?: number }, exec: any) {
-      if (!config.executeEnabled) return { text: 'context-mode: ctx_batch_execute 未启用', count: 0 }
+      if (!config.executeEnabled) throw new Error('context-mode: ctx_batch_execute 未启用（executeEnabled=false）')
       const d = requireDb()
       const sid = exec?.agent?.sessionId ?? 'anon'
       const concurrency = Math.min(8, Math.max(1, args.concurrency ?? config.executeConcurrency))
