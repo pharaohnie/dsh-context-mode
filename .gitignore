@@ -1,0 +1,21 @@
+# 依赖 / 构建产物（node_modules 可能是指向本机 DSH 安装的 symlink，必须排除，不能提交到仓库）
+node_modules
+node_modules/
+dist/
+*.tsbuildinfo
+
+# 日志 / 临时
+*.log
+.DS_Store
+tmp/
+*.swp
+
+# 本地 db / 测试产物（知识库 db 实际在 ~/.context-mode，不在仓库内）
+*.db
+*.sqlite
+/content/
+coverage/
+
+# 编辑器
+.idea/
+.vscode/

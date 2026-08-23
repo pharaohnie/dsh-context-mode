@@ -1,0 +1,12 @@
+{
+  "name": "dsh-context-mode",
+  "description": "DSH context-window relief: knowledge base, routing enforcement, session continuity.",
+  "version": "0.1.0",
+  "entry": {
+    "name": "dsh-context-mode",
+    "inject": [
+      "tools",
+      "systemPrompt"
+    ]
+  }
+}

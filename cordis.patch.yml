@@ -1,0 +1,7 @@
+# context-mode bundle 自带的组合 patch：把自己的插件行注入宿主 composition
+# 机制同 my-custom-inject：bundle 的 dsh.bundle.patch 指向本文件，loader 据此 `insert` 插件行。
+- insert:
+    - id: context-mode
+      name: 'dsh-context-mode'
+      config:
+        routingEnabled: true
