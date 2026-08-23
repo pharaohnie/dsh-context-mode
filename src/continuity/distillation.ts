@@ -2,6 +2,7 @@
 // 输出一段紧凑恢复摘要；last-prompt（最近用户意图）必恢复。
 export interface DistillEvent { seq: number; type: string; text: string }
 
+// P3-2：恢复摘要字节上限（控制注入上下文体积），定位为内部常量，非部署差异点。
 const MAX_SUMMARY_BYTES = 2000
 
 function hash(s: string): string {

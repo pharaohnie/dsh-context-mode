@@ -18,6 +18,9 @@ export const name = 'context-mode'
 // 可选：sessionQuery/tokenMeter/sessions/approval 经 ctx.get，缺失降级不阻塞（I3）
 export const inject = ['tools', 'systemPrompt']
 
+// P3-4：此 ctx 是官方 @deepseek-ai/cordis 的 `Context` 的**窄化字面量**（插件只声明所用键 tools/systemPrompt/on/get，
+// 保持 erasable-TS 无装饰器、无需完整 cordis 类型 import）。完整类型可换 `import type { Context } from '@deepseek-ai/cordis'`；
+// 工具 execute 的 `exec` 对应 `ToolRunContext`（此处用 `any` 以便跨工具复用，保持与 defineTool 实际运行时一致）。
 export function apply(ctx: {
   tools: { register(def: unknown): unknown; guard(fn: (exec: unknown) => string | undefined): unknown }
   systemPrompt: { section(s: unknown): unknown }
@@ -58,6 +61,7 @@ export function apply(ctx: {
   // M2：路由强制（host 全局注册；fail-open 用 ctx.get('approval') 探测）
   const hasApproval = () => ctx.get('approval') !== undefined
   // read_denied_bytes 按 file_path 去重（同一文件只计一次，避免重复被拒让 saved 虚增）
+  // P3-3：模块级单例、有界（同一 file_path 只记一次，重启动前会保留以维持去重；非 per-apply 状态，cap 对应「去重」而非「无限增长」）。
   const deniedReadFiles = new Set<string>()
   registerGate(ctx, {
     config: {

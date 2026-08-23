@@ -7,6 +7,8 @@ import { chunkMarkdown } from './chunker.ts'
 import { concurrencyPool, urlToMarkdown } from './web.ts'
 
 /** ctx_search 默认输出字节预算（也与 advice/deny reason 中引用的「预算」对齐）。 */
+// P3-2：SEO 检索粒度常量。定位为内部常量（与 chunker maxBytes 一致，非部署差异点）——文案/召回粒度跟随知识库单元，
+// 不随部署不同而变，故不做成 config；如需调可用 ctx_search(budgetBytes:) 覆盖单次。 
 export const SEARCH_BUDGET_BYTES = 8000
 
 export interface KnowledgeToolsDeps {

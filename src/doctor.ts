@@ -51,7 +51,10 @@ export function registerDoctor(ctx: { tools: { register(def: unknown): unknown }
       report('sessions（可选）', deps.sessions !== undefined)
       report('approval（可选）', deps.approval !== undefined,
         deps.approval !== undefined ? '' : '缺失 -> ask 走 fail-open 放行+警告')
-      report('Node 全局 fetch', typeof fetch === 'function')
+      // P3-6：不假定 Node 全局可用，统一断言 fetch/setTimeout/AbortController（DSH 指南「先查 Builtins」）
+      report('Node 全局（fetch/setTimeout/AbortController）',
+        typeof fetch === 'function' && typeof setTimeout === 'function' && typeof AbortController === 'function',
+        `fetch=${typeof fetch === 'function'} setTimeout=${typeof setTimeout === 'function'} AbortController=${typeof AbortController === 'function'}`)
       // S3：分开报告「执行 substrate」与「文件策略」——勿把两者混报为同一 sandbox 模式
       const rt = deps.codeRuntime as { isolation?: unknown } | undefined
       report('codeRuntime（执行 substrate）', rt !== undefined,

@@ -7,6 +7,8 @@ export const MEMORY_KINDS = ['user-prompt', 'decision', 'constraint', 'rejected-
 export type MemoryKind = (typeof MEMORY_KINDS)[number]
 
 // 进程级 seen-set 去重（decision/constraint/rejected-approach 防重复事件反复入账）
+// P3-3：模块级单例、有界（SEEN_CAP=512，超出淘汰最旧）。它是「进程级幂等/去重」而非 per-apply 状态——
+// 停在 stop/update 时保留以维持跨 apply 去重，但 cap 已约束内存，不会无限增长。
 const seen = new Set<string>()
 const SEEN_CAP = 512
 function hash(s: string): string {

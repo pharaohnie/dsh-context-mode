@@ -77,31 +77,7 @@ export interface ContextModeConfig {
   continuityTopN: number
 }
 
-/** 显式默认值：即便 loader 未对 config 应用 schema 默认，也用此兜底。 */
-export const DEFAULT_CONFIG: ContextModeConfig = {
-  routingEnabled: true,
-  denyCurlWget: true,
-  bashNudgeMinCommandBytes: 0,
-  maxReadBytesBeforeAsk: 51200,
-  autoGuideRead: true,
-  readAllowBounded: true,
-  trustedReadBasenames: ['README', 'CHANGELOG', 'LICENSE', 'AGENTS', 'package.json'],
-  trustedDocHeadroom: 4,
-  executeEnabled: true,
-  executeDefaultLanguage: 'ts',
-  executeAllowShell: false,
-  executeTimeoutMs: 0,
-  executeConcurrency: 4,
-  knowledgeBaseDir: defaultKnowledgeDir,
-  knowledgeBaseTtlMs: 86_400_000,
-  knowledgeBaseConcurrency: 4,
-  memoryCapture: false,
-  memoryTtlMs: 7 * 86_400_000,
-  memoryResumeTopN: 3,
-  memoryResumeBytes: 800,
-  adviceStructured: true,
-  adviceRich: true,
-  accountingLedger: false,
-  sessionContinuity: true,
-  continuityTopN: 20,
-}
+/** 显式默认值：即便 loader 未对 config 应用 schema 默认，也用此兜底。
+ *  从 schema 推导（P3-1 单一来源）：schema 默认改了，DEFAULT_CONFIG 自动跟随，避免手写两份漂移。
+ *  注：本插件实测 bundle 机制 loader 不应用 schemastery 默认值，故仍需要此兜底（环境事实，README 已记录）。 */
+export const DEFAULT_CONFIG: ContextModeConfig = (Config['~standard'].validate({}) as { value: ContextModeConfig }).value

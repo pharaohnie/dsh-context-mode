@@ -5,6 +5,7 @@ import { DatabaseSync } from 'node:sqlite'
 import fs from 'node:fs'
 import path from 'node:path'
 
+// P3-2：RRF 合并常数（检索排名的 k=60，业界常见），定位为内部算法常量、非部署差异点。
 const RRF_K = 60
 
 export interface KnowledgeChunk { id: number; ref: string; title: string; body: string; created_at: number; ttl_ms: number }

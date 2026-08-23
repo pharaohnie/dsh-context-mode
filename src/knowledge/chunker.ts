@@ -4,7 +4,8 @@ export interface Chunk { title: string; body: string }
 const HEADING = /^(#{1,2})\s+(.*)$/
 const FENCE = /^```/
 
-/** 按标题（#/##）切分 markdown，超过 maxBytes 的块在行边界二次切分。 */
+/** 按标题（#/##）切分 markdown，超过 maxBytes 的块在行边界二次切分。
+ *  P3-2：maxBytes 默认 8000 = 检索/分块粒度（与 SEARCH_BUDGET_BYTES 一致），定位为内部常数，非部署差异点。 */
 export function chunkMarkdown(text: string, maxBytes = 8000): Chunk[] {
   const lines = text.split('\n')
   const chunks: Chunk[] = []
