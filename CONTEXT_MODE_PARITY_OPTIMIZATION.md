@@ -145,12 +145,20 @@
 
 ---
 
-## 六、验证
+## 七、实施状态（截至提交）
 
-1. `ctx_doctor` 全 ✓。
-2. 场景 A：无害短命令（`pwd`/`git status`）→ 直接放行，不触发长命令 ask。
-3. 场景 B：`curl url` → deny + 引导（refined reason），`ctx_stats` 的 redirect_bytes 增加。
-4. 场景 C：`ctx_search` 命中片段 → `retrieval_bytes` 增加，`ctx_stats` 展示分类。
-5. 场景 D：`securityEnabled=false`（默认）→ 行为与现状完全一致（不回归）；`true` + denyGlob → 命中 deny。
-6. 场景 E：设置 `CONTEXT_MODE_MAX_READ_BYTES=30000` → env 覆盖生效。
-7. 场景 F：`ctx_doctor`/`ctx_stats` 正确反映新配置与度量，且不变更既有记账口径可读性。
+| 项 | 状态 | 提交 |
+|---|---|---|
+| §3.1 修正 3 坑（ctx_search 描述 / chunker 注释 / accountingLedger 接线） | ✅ 完成 | ba09496 |
+| §3.2 结构性有界白名单 isStructurallyBounded | ✅ 完成 | ba09496 |
+| §3.3 env 运行时覆盖 envConfigOverrides | ✅ 完成 | ba09496 |
+| §3.4 SKILL 软触发（knowledge/skill.ts） | ✅ 完成 | ba09496 |
+| §3.5 默认安全基线（securityEnabled + allow/deny glob，默认关） | ✅ 完成 | ba09496 |
+| §3.6 效果度量闭环（redirect/retrieval/rejected 分类记账） | ✅ 完成 | ba09496 |
+| §3.7 引导节流 once/periodic（util/guidance.ts） | ✅ 完成 | ba09496 |
+| P2-3 子代理守卫（session-start 给子代理注入 protection 块，默认关） | ✅ 完成 | a59e6a6 |
+| ctx_doctor 报告新配置 armed 状态 | ✅ 完成 | 8848cfa |
+
+**已知不可行项（DSH 契约限制，非缺失）**：精确重定向改命令（DSH 无 `modify updatedInput`）、完整文件级权限策略（仅 basename/前缀 glob 近似）、$ 成本聚合（无计价层）。这些在 §五 有说明。
+
+**运行态验证前提**：本插件 bundle 直载 `src/index.ts`（Node ≥24 strip-types）。以上改动写入 `src/` 后，**需重启 DSH** 才能在当前进程生效（当前进程加载的是旧版）。重启后 `ctx_doctor`/`ctx_stats` 应反映新能力；`ctx_search` 需观察 taper/block 节流，`curl/wget` deny 需观察 redirect_bytes 分类。
