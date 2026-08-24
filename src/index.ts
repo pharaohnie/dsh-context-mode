@@ -28,6 +28,8 @@ export function apply(ctx: {
   systemPrompt: { section(s: unknown): unknown }
   on(event: string, listener: (...a: never[]) => unknown): void
   get(name: string): unknown
+  // 合规修复（报告问题2）：手动清理的资源用 ctx.effect 注册处置器（官方「第一个插件」/「生命周期」页）
+  effect(fn: () => (() => void) | void): unknown
 }, rawConfig: Partial<ContextModeConfig>) {
   // 防御：loader 可能未对 config 应用 schema 默认，用显式 DEFAULT_CONFIG 兜底合并。
   // P3-1：env 覆盖插在 DEFAULT_CONFIG 与 rawConfig 之间（优先级 rawConfig > env > 默认）。
@@ -41,6 +43,12 @@ export function apply(ctx: {
   try {
     kdb = openKnowledgeDb(config.knowledgeBaseDir)
     console.log('[context-mode] 知识库已就绪:', kdb.file)
+    // 合规修复（报告问题2）：DB 连接随插件 fiber 生命周期关闭（卸载/HMR/禁用时）；
+    // 多次 close 会抛错，try-catch 吞掉；并发窗口由 busy_timeout=5000 兜底。
+    const opened = kdb
+    ctx.effect(() => () => {
+      try { opened.db.close() } catch { /* 已关闭 */ }
+    })
   } catch (e) {
     console.log('[context-mode] 知识库打开失败:', (e as Error).message)
     kdb = null
