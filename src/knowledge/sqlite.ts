@@ -94,12 +94,17 @@ export function getMeta(db: DatabaseSync, key: string): number {
 
 /** 修正口径的节约台账（S7）：measured_saved 仅 read 侧检测口径（read_denied_bytes，唯一精确「本应进入上下文」）；
  *  entered = search_bytes + execute_log_bytes（实际进入/返还）；kept_out_pct_measured 只反映 read 侧，不代表全量节约。
- *  kept_out_pct_total 含 estimate/下界（indexed-search 粗差 + denied_bytes 命令串下界），与之并列展示。 */
+ *  kept_out_pct_total 含 estimate/下界（indexed-search 粗差 + denied_bytes 命令串下界），与之并列展示。
+ *  P0-1 度量闭环：新增 redirect（洪水被改道 -> redirect_bytes，下界=命令串长度）、retrieval（ctx_search 命中片段 -> retrieval_bytes，真实进入上下文）、
+ *  rejected（deny 回传 rejected-approach -> rejected_bytes，reason 文本下界），让 kept_out_pct 更接近官方「逆向记账」的 measured 口径。 */
 export function computeSavedBytes(db: DatabaseSync): {
   indexed: number
   search: number
   readDenied: number
   cmdDenied: number
+  redirect: number
+  retrieval: number
+  rejected: number
   executeLog: number
   saved: number
   measuredSaved: number
@@ -111,17 +116,20 @@ export function computeSavedBytes(db: DatabaseSync): {
   const search = getMeta(db, 'search_bytes')
   const readDenied = getMeta(db, 'read_denied_bytes')
   const cmdDenied = getMeta(db, 'denied_bytes')
+  const redirect = getMeta(db, 'redirect_bytes')
+  const retrieval = getMeta(db, 'retrieval_bytes')
+  const rejected = getMeta(db, 'rejected_bytes')
   const executeLog = getMeta(db, 'execute_log_bytes')
   const saved = Math.max(0, indexed - search) + readDenied + cmdDenied
-  const measuredSaved = readDenied // read 侧检测口径
+  const measuredSaved = readDenied + redirect // read 侧精确 + 洪水改道（命令串下界）
   const entered = search + executeLog
   const keptOutMeasured = measuredSaved + entered > 0 ? (measuredSaved / (measuredSaved + entered)) * 100 : 0
   const keptOutTotal = saved + entered > 0 ? (saved / (saved + entered)) * 100 : 0
-  return { indexed, search, readDenied, cmdDenied, executeLog, saved, measuredSaved, entered, keptOutMeasured, keptOutTotal }
+  return { indexed, search, readDenied, cmdDenied, redirect, retrieval, rejected, executeLog, saved, measuredSaved, entered, keptOutMeasured, keptOutTotal }
 }
 
 /** 取体文本（M1 命中片段用）。 */
-function getSnippet(body: string, terms: string[], window = 40): string {  const lower = body.toLowerCase()
+function getSnippet(body: string, terms: string[], window = 64): string {  const lower = body.toLowerCase()
   let best = -1
   for (const t of terms) {
     const i = lower.indexOf(t.toLowerCase())

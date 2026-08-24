@@ -5,9 +5,39 @@
 //       因此 read 门禁（需 async stat）只能在 pre-execute 里做，guard 只保留 sync 的 bash-flood 兜底。
 import nodeFs from 'node:fs'
 import nodePath from 'node:path'
-import { floodCommandWord } from '../util/shell-tokenize.ts'
+import { floodCommandWord, firstCommandWord, hasShellControlOps } from '../util/shell-tokenize.ts'
 
 const FLOOD_WORDS = ['curl', 'wget', 'inline-fetch']
+
+/** 结构性有界判定（P1-2）：命令为白名单单命令 + 无 shell 控制运算符 → 无害，应零摩擦放行。
+ *  对齐官方 isStructurallyBounded：只要首个命令词在白名单、且命令串无控制运算符，就放行（不进长命令 ask/门槛）。 */
+export function isStructurallyBounded(command: string, whitelist: string[]): boolean {
+  if (!command) return false
+  if (hasShellControlOps(command)) return false // 有控制运算符（管道/串联/重定向/子shell）＝非单命令
+  const first = firstCommandWord(command)
+  if (!first) return false
+  return whitelist.some((w) => w.toLowerCase() === first)
+}
+
+/** 简单 glob 匹配（P0-2 安全基线）：`*` 匹配任意不含 `/` 的子串，`?` 单个字符；其余按前缀匹配。
+ *  仅用于 basename/相对路径的 allow/deny 判定，非完整文件系统语义（对齐官方 permissions 的近似）。 */
+export function globMatch(target: string, glob: string): boolean {
+  const g = glob.replace(/\\/g, '/').toLowerCase()
+  const t = target.replace(/\\/g, '/').toLowerCase()
+  const rx = '^' + g.split('*').map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\?/g, '.')).join('.*') + '$'
+  try { return new RegExp(rx).test(t) } catch { return false }
+}
+
+/** P0-2 安全基线判定：securityEnabled=false → undefined（不干预）；true 时按 allow/deny glob fail-closed。
+ *  顺序：命中 allow → 放行(undefined)；命中 deny 未 allow → 返回 deny reason；两 globs 均空 → 放行（不预设规则不拦）。 */
+export function securityDecision(target: string, cfg: { securityEnabled: boolean; securityAllowGlobs: string[]; securityDenyGlobs: string[] }): string | undefined {
+  if (!cfg.securityEnabled) return undefined
+  const allowed = cfg.securityAllowGlobs.some((g) => globMatch(target, g))
+  if (allowed) return undefined
+  const denied = cfg.securityDenyGlobs.some((g) => globMatch(target, g))
+  if (denied) return `context-mode: 安全策略（securityEnabled）拒绝访问 ${target}（命中 deny glob；允许名单未命中）。`
+  return undefined
+}
 
 /** 共享洪水规则：bash 命令的任一命令段首词为 flood 工具时返回 deny reason，否则 undefined。
  *  用 floodCommandWord 扫描全部命令段（识别重定向目标/sudo -u/env -i/路径basename/bash -c 等绕行）。 */
@@ -93,12 +123,20 @@ export interface GateDeps {
     executeEnabled: boolean
     executeAllowShell: boolean
     executeDefaultLanguage: string
+    boundedWhitelist: string[]
+    securityEnabled: boolean
+    securityAllowGlobs: string[]
+    securityDenyGlobs: string[]
   }
   hasApproval: () => boolean
   recordDenied?: (bytes: number) => void
+  /** 洪水工具被「改道」（redirect）的分类记账：命令串长度作为免受上下文冲击的字节下界。 */
+  recordRedirect?: (bytes: number) => void
   recordDeniedRead?: (size: number, filePath: string) => void
   /** deny 时上报 rejected-approach 记忆（P1b；低频，按 deny reason 去重）。 */
   recordRejected?: (sid: string, reason: string) => void
+  /** rejected-approach 分类记账：deny reason 文本长度作为字节下界（P0-1 度量）。 */
+  recordRejectedBytes?: (bytes: number) => void
   /** deny 时附加的一次性回流文本（低频事件，不常驻 prompt）。 */
   contextNote?: () => string | undefined
 }
@@ -111,16 +149,26 @@ export function registerGate(ctx: {
     if (!deps.config.routingEnabled) return next()
     const name = exec?.name
     const args = exec?.arguments ?? {}
-    const reject = (reason: string) => { const sid = exec?.agent?.sessionId; if (sid) deps.recordRejected?.(sid, reason) }
+    const reject = (reason: string) => {
+      const sid = exec?.agent?.sessionId
+      if (sid) deps.recordRejected?.(sid, reason)
+      deps.recordRejectedBytes?.(typeof reason === 'string' ? reason.length : 0)
+    }
     try {
       // ① bash 洪水硬 deny（确定性，不走 fail-open）
       if (deps.config.denyCurlWget && name === 'bash') {
         const reason = floodReason(name, args)
         if (reason) {
-          deps.recordDenied?.(typeof args.command === 'string' ? args.command.length : 0)
+          const cmdLen = typeof args.command === 'string' ? args.command.length : 0
+          deps.recordDenied?.(cmdLen)
+          deps.recordRedirect?.(cmdLen) // 洪水工具被改道（redirect 分类）
           reject(reason)
           return { kind: 'deny', reason }
         }
+      }
+      // ①.5 结构性有界白名单（P1-2）：无害单命令（白名单 + 无控制运算符）→ 零摩擦放行，不碰长命令 ask。
+      if (name === 'bash' && typeof args.command === 'string' && isStructurallyBounded(args.command, deps.config.boundedWhitelist)) {
+        return next()
       }
       // ② 无界 bash 长命令 -> ask（处理意图：软引导，无审批通道时放行）
       if (name === 'bash' && deps.config.bashNudgeMinCommandBytes > 0) {
@@ -151,6 +199,7 @@ export function registerGate(ctx: {
             const word = floodCommandWord(codeStr)
             if (FLOOD_WORDS.includes(word)) {
               deps.recordDenied?.(codeStr.length)
+              deps.recordRedirect?.(codeStr.length) // 洪水改道分类
               return { kind: 'deny', reason: `context-mode: 检测到确定性洪水工具 "${word}"（会淹没上下文窗口），已拒绝。请改用 ctx_fetch_and_index 索引 + ctx_search 检索，或 ctx_execute(language:"ts",code) 沙箱处理。` }
             }
           }
@@ -163,6 +212,15 @@ export function registerGate(ctx: {
         // path 解析失败/无 code → 在工具内 fail-open，门禁不 deny
       }
       // ④ read 整读门禁（async：await stat；只拦文本 read，read_image 放行；run_code 子分派不豁免，统一按 size 判）
+      const sep = securityDecision(typeof args.file_path === 'string' ? args.file_path : '', {
+        securityEnabled: deps.config.securityEnabled,
+        securityAllowGlobs: deps.config.securityAllowGlobs,
+        securityDenyGlobs: deps.config.securityDenyGlobs,
+      })
+      if (sep) {
+        reject(sep)
+        return { kind: 'deny', reason: sep }
+      }
       const decision = await readFloodDecision(exec, deps.config, (fp) => statSize(fp, exec, ctx.get('fs')))
       if (decision) {
         deps.recordDeniedRead?.(decision.size, typeof args.file_path === 'string' ? args.file_path : '')

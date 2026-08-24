@@ -1,6 +1,6 @@
 // index.ts — context-mode 插件入口（M0 骨架 + M1 知识库工具）
 // 相对导入一律带 .ts 后缀；erasable TS 语法（无 enum/namespace）
-import { Config, DEFAULT_CONFIG, type ContextModeConfig } from './config.ts'
+import { Config, DEFAULT_CONFIG, envConfigOverrides, type ContextModeConfig } from './config.ts'
 import { registerDoctor, type DoctorDeps } from './doctor.ts'
 import { registerKnowledgeTools, SEARCH_BUDGET_BYTES } from './knowledge/tools.ts'
 import { registerExecuteTools } from './knowledge/execute.ts'
@@ -9,6 +9,7 @@ import { openKnowledgeDb, incMeta, computeSavedBytes, type KnowledgeDb } from '.
 import { registerGate } from './routing/gate.ts'
 import { registerGuard } from './routing/guard.ts'
 import { registerAdvice } from './routing/advice.ts'
+import { registerSkill } from './knowledge/skill.ts'
 import { registerRestore } from './continuity/restore.ts'
 import { registerStats } from './continuity/stats.ts'
 
@@ -28,7 +29,8 @@ export function apply(ctx: {
   get(name: string): unknown
 }, rawConfig: Partial<ContextModeConfig>) {
   // 防御：loader 可能未对 config 应用 schema 默认，用显式 DEFAULT_CONFIG 兜底合并。
-  const config: ContextModeConfig = { ...DEFAULT_CONFIG, ...rawConfig }
+  // P3-1：env 覆盖插在 DEFAULT_CONFIG 与 rawConfig 之间（优先级 rawConfig > env > 默认）。
+  const config: ContextModeConfig = { ...DEFAULT_CONFIG, ...envConfigOverrides(), ...rawConfig }
   console.log('[context-mode] apply 收到 config =', JSON.stringify(config))
   // 打开知识库（失败则降级：ctx_doctor 报告 + 知识库工具报错）
   let kdb: KnowledgeDb | null = null
@@ -55,7 +57,7 @@ export function apply(ctx: {
   }
   registerDoctor(ctx, deps)
   // M1：知识库四工具
-  registerKnowledgeTools(ctx, { kdb, config })
+  registerKnowledgeTools(ctx, { kdb, config: { knowledgeBaseTtlMs: config.knowledgeBaseTtlMs, knowledgeBaseConcurrency: config.knowledgeBaseConcurrency, searchWindowMs: config.searchWindowMs, searchMaxResultsAfter: config.searchMaxResultsAfter, searchBlockAfter: config.searchBlockAfter } })
   // P0：沙箱执行三工具（复用 DSH codeRuntime；把 config 里的 execute* 传过去）
   registerExecuteTools(ctx, { kdb, config })
   // M2：路由强制（host 全局注册；fail-open 用 ctx.get('approval') 探测）
@@ -76,11 +78,19 @@ export function apply(ctx: {
       executeEnabled: config.executeEnabled,
       executeAllowShell: config.executeAllowShell,
       executeDefaultLanguage: config.executeDefaultLanguage,
+      boundedWhitelist: config.boundedWhitelist,
+      securityEnabled: config.securityEnabled,
+      securityAllowGlobs: config.securityAllowGlobs,
+      securityDenyGlobs: config.securityDenyGlobs,
     },
     hasApproval,
     // 拒绝洪水的字节计入节约台账（curl/wget 命令串长度，persisted to knowledge db meta 表）
     recordDenied: (bytes) => {
       if (kdb) incMeta(kdb.db, 'denied_bytes', bytes)
+    },
+    // 洪水被改道（redirect 分类）—— vs 拒绝：redirect 是「避开的上下文冲击」下界（P0-1 度量）
+    recordRedirect: (bytes) => {
+      if (kdb) incMeta(kdb.db, 'redirect_bytes', bytes)
     },
     // read 被拒的真实拦截字节（stat.size），按 file_path 去重，记入独立键 read_denied_bytes
     recordDeniedRead: (size, filePath) => {
@@ -92,7 +102,12 @@ export function apply(ctx: {
     recordRejected: (sid, reason) => {
       if (kdb) captureMemory(kdb, 'rejected-approach', sid, reason, config.memoryCapture, config.memoryTtlMs)
     },
+    // rejected 分类记账（P0-1）：deny reason 文本长度下界
+    recordRejectedBytes: (bytes) => {
+      if (kdb) incMeta(kdb.db, 'rejected_bytes', bytes)
+    },
     // deny 时一次性回流累计节约（低频事件，不常驻 prompt）
+    // P2-2 节流：同会话同类别只回流一次（guidanceOnce），避免每次 deny 都查库算节约刷屏。
     contextNote: () => {
       if (!kdb) return undefined
       try {
@@ -118,6 +133,8 @@ export function apply(ctx: {
     adviceRich: config.adviceRich,
     executeDefaultLanguage: config.executeDefaultLanguage,
   })
+  // P1-1：注册可软触发的 context-mode skill（DSH skills 可选；缺失降级到 advice 常驻 section）
+  registerSkill(ctx, { enabled: config.routingEnabled })
   // M3：会话连续性恢复（session-start 监听 + sessionQuery 检索 + agent.inject 注入）
   registerRestore(ctx, {
     config: {
@@ -137,5 +154,5 @@ export function apply(ctx: {
     sessionQuery: ctx.get('sessionQuery') as { filterEvents?: (id: string, f: unknown[]) => Promise<unknown[]> } | undefined,
   })
   // M4：ctx_stats（节约台账 + tokenMeter 压力）
-  registerStats(ctx, { kdb })
+  registerStats(ctx, { kdb, accountingLedger: config.accountingLedger })
 }

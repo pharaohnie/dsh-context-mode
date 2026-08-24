@@ -9,11 +9,25 @@ import { concurrencyPool, urlToMarkdown } from './web.ts'
 /** ctx_search 默认输出字节预算（也与 advice/deny reason 中引用的「预算」对齐）。 */
 // P3-2：SEO 检索粒度常量。定位为内部常量（与 chunker maxBytes 一致，非部署差异点）——文案/召回粒度跟随知识库单元，
 // 不随部署不同而变，故不做成 config；如需调可用 ctx_search(budgetBytes:) 覆盖单次。 
-export const SEARCH_BUDGET_BYTES = 8000
+export const SEARCH_BUDGET_BYTES = 12000
 
 export interface KnowledgeToolsDeps {
   kdb: KnowledgeDb | null
-  config: { knowledgeBaseTtlMs: number; knowledgeBaseConcurrency: number }
+  config: { knowledgeBaseTtlMs: number; knowledgeBaseConcurrency: number; searchWindowMs?: number; searchMaxResultsAfter?: number; searchBlockAfter?: number }
+}
+
+/** P2-1 搜索 FloodGuard：进程级时间窗滚动计数（对齐官方 SEARCH_WINDOW_MS/SEARCH_MAX_RESULTS_AFTER/SEARCH_BLOCK_AFTER）。
+ *  窗口内前 searchMaxResultsAfter 次检索放行；之后 taper（减少返回条数）；到 searchBlockAfter 次后硬 block 并给引导。
+ *  注：erasableSyntaxOnly 下不用 class，用闭包实现（TS 无类字段运行支持）。 */
+export function createFloodGuard(windowMs = 60_000, maxAfter = 3, blockAfter = 8): (now?: number) => 'ok' | 'taper' | 'block' {
+  const calls: number[] = []
+  return (now = Date.now()): 'ok' | 'taper' | 'block' => {
+    calls.push(now)
+    while (calls.length && now - calls[0] > windowMs) calls.shift()
+    if (blockAfter > 0 && calls.length > blockAfter) return 'block'
+    if (maxAfter > 0 && calls.length > maxAfter) return 'taper'
+    return 'ok'
+  }
 }
 
 function collectFiles(paths: string[], maxFiles = 2000): string[] {
@@ -44,6 +58,8 @@ const textSchema = {
 
 export function registerKnowledgeTools(ctx: { tools: { register(def: unknown): unknown }; get(name: string): unknown }, deps: KnowledgeToolsDeps) {
   const { kdb, config } = deps
+  // P2-1：搜索 FloodGuard（时间窗滚动计数；windowMs<=0 或 blockAfter<=0 则关闭）
+  const floodHit = createFloodGuard(config.searchWindowMs ?? 60_000, config.searchMaxResultsAfter ?? 3, config.searchBlockAfter ?? 8)
   const requireDb = () => {
     if (!kdb) throw new Error('context-mode 知识库未就绪（目录不可写？）')
     return kdb.db
@@ -60,7 +76,7 @@ export function registerKnowledgeTools(ctx: { tools: { register(def: unknown): u
 
   ctx.tools.register(defineTool({
     name: 'ctx_index',
-    description: '索引到知识库：把本地文件或目录切片（按标题、保留代码块），写入 FTS5 双表（porter 词根 + trigram 子串）。何时用：需要处理/复用大文件或目录内容、供后续检索时（先 index 再 ctx_search），代替一次性整读。',
+    description: '索引到知识库：把本地文件或目录切片（按标题、保留代码块），写入 FTS5 双表（porter 词根 + trigram 子串）。何时用：需要处理/复用大文件或目录内容、供后续检索时（先 index 再 ctx_search）。同一目录/多个文件要用时，ctx_index(目录) 一次入库，比逐个 read 省——代替一次性整读。',
     parameters: {
       paths: { type: 'array', required: true, items: { type: 'string' }, description: '文件或目录路径，递归收集' },
       ttlMs: { type: 'number', description: '覆盖默认 TTL（毫秒）' },
@@ -92,19 +108,26 @@ export function registerKnowledgeTools(ctx: { tools: { register(def: unknown): u
       queries: { type: 'array', items: { type: 'string' }, description: '批量检索词，一次往返' },
       sort: { type: 'string', enum: ['relevance', 'timeline'], description: '默认 relevance（RRF score）；timeline 按入库时间（最新在前）' },
       source: { type: 'array', items: { type: 'string' }, description: '按 ref 前缀过滤（如 memory:decision；单 string 视为单元素；源前缀 OR）' },
-      topN: { type: 'number', description: '返回条数上限（默认 10）' },
-      budgetBytes: { type: 'number', description: '输出字节预算（默认 8000）' },
+      topN: { type: 'number', description: '返回条数上限（默认 16）' },
+      budgetBytes: { type: 'number', description: `输出字节预算（默认 ${SEARCH_BUDGET_BYTES}）` },
     },
     output: { schema: textSchema, render: (_args: unknown, v: { text: string }) => [{ type: 'text', text: v.text }] as any },
     async execute(args: { query?: string; queries?: string[]; sort?: 'relevance' | 'timeline'; source?: string | string[]; topN?: number; budgetBytes?: number }) {
       const d = requireDb()
       deleteExpired(d)
+      // P2-1：搜索 FloodGuard（时间窗滚动计数）。block → 拒绝给引导；taper → 减少返回条数（软上限）。
+      const gate = floodHit()
+      if (gate === 'block') {
+        throw new Error('context-mode: 检索调用过于频繁（超过时间窗硬上限），已节流。请减少检索频率，或改用 ctx_execute_file/ctx_batch_execute 定向取数。')
+      }
       const sort = args.sort ?? 'relevance'
       const source = args.source ? (Array.isArray(args.source) ? args.source : [args.source]) : undefined
       const queries = args.queries && args.queries.length ? args.queries : (args.query ? [args.query] : [])
       if (!queries.length) return { text: '（无查询词）', count: 0 }
       const budget = args.budgetBytes ?? SEARCH_BUDGET_BYTES
-      const topN = args.topN ?? 10
+      // taper 时收缩 topN（软上限，不做硬 block，只是降低返回体量避免窗口被检索反复撑大）
+      let topN = args.topN ?? 16
+      if (gate === 'taper') topN = Math.max(1, Math.floor(topN / 2))
       // 多 query：各自 searchChunks（大 topN/budget 以免过早裁切），合并去重后按 sort 排序，再裁 budget + topN
       const hitsArr: { id: number; ref: string; title: string; snippet: string; score: number }[] = []
       const seen = new Set<number>()
@@ -124,7 +147,10 @@ export function registerKnowledgeTools(ctx: { tools: { register(def: unknown): u
       }
       const lines = clipped.map((h) => `[score ${h.score.toFixed(3)}] ${h.snippet}\n  ref: ${h.ref}`)
       const returnedBytes = clipped.reduce((a, h) => a + h.snippet.length, 0)
-      if (returnedBytes > 0) incMeta(d, 'search_bytes', returnedBytes)
+      if (returnedBytes > 0) {
+        incMeta(d, 'search_bytes', returnedBytes)
+        incMeta(d, 'retrieval_bytes', returnedBytes) // P0-1：检索命中片段（真实进入上下文）分类记账
+      }
       return { text: lines.length ? lines.join('\n') : '（无命中）', count: clipped.length }
     },
   }))

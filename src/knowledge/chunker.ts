@@ -5,7 +5,8 @@ const HEADING = /^(#{1,2})\s+(.*)$/
 const FENCE = /^```/
 
 /** 按标题（#/##）切分 markdown，超过 maxBytes 的块在行边界二次切分。
- *  P3-2：maxBytes 默认 8000 = 检索/分块粒度（与 SEARCH_BUDGET_BYTES 一致），定位为内部常数，非部署差异点。 */
+ *  maxBytes 是分块粒度常数（默认 8000），与检索预算 SEARCH_BUDGET_BYTES(12000) 是两件事——
+ *  前者控制单块大小（入库粒度），后者控制 ctx_search 返回的片断总预算；如需对齐请显式改这一处与 tools.ts 的常量。 */
 export function chunkMarkdown(text: string, maxBytes = 8000): Chunk[] {
   const lines = text.split('\n')
   const chunks: Chunk[] = []

@@ -81,3 +81,28 @@ export function firstCommandWord(command: string): string {
   }
   return ''
 }
+
+/** 是否包含 shell 控制运算符（管道/分号/&&/||/重定向/子shell/后台/命令替换等）。
+ *  用于「结构性有界」判定：一个含控制运算符的命令不是「单命令」，不属于可安全放行的无害白名单。
+ *  引号语义：单引号内全部字面量（跳过）；双引号内普通字符跳过，但**命令替换 `$(` 与反引号仍生效**，须检测。
+ *  保守取向：宁可多判一个「有控制」，也不放行一个含命令替换的命令（安全基线偏严）。 */
+export function hasShellControlOps(command: string): boolean {
+  if (!command) return false
+  let inSingle = false
+  let inDouble = false
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i]
+    if (ch === '\\') { i++; continue }
+    if (ch === "'" && !inDouble) { inSingle = !inSingle; continue }
+    if (ch === '"' && !inSingle) { inDouble = !inDouble; continue }
+    if (inSingle) continue // 单引号内全字面量
+    // 双引号内命令替换仍执行；单/双引号外普通控制运算符
+    if (inDouble) {
+      if (ch === '$' && command[i + 1] === '(') return true
+      if (ch === '`') return true
+      continue
+    }
+    if ('|;&<>`$(){}*?[]'.includes(ch)) return true
+  }
+  return false
+}

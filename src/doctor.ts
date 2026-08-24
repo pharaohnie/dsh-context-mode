@@ -18,7 +18,7 @@ export interface DoctorDeps {
   sandboxPolicy?: unknown
 }
 
-export function registerDoctor(ctx: { tools: { register(def: unknown): unknown } }, deps: DoctorDeps) {
+export function registerDoctor(ctx: { tools: { register(def: unknown): unknown }; get(name: string): unknown }, deps: DoctorDeps) {
   ctx.tools.register(defineTool({
     name: 'ctx_doctor',
     description: '诊断 context-mode 插件的 seam 装配状态、知识库健康与宿主能力。只读，不改任何状态。',
@@ -44,10 +44,13 @@ export function registerDoctor(ctx: { tools: { register(def: unknown): unknown }
       }
       report('tools（硬）', deps.tools !== undefined, '', true)
       report('systemPrompt（硬）', deps.systemPrompt !== undefined, '', true)
-      report('sessionQuery（可选）', deps.sessionQuery !== undefined,
-        deps.sessionQuery !== undefined ? '' : '缺失 -> 会话连续性降级')
-      report('tokenMeter（可选）', deps.tokenMeter !== undefined,
-        deps.tokenMeter !== undefined ? '' : '缺失 -> ctx_stats 无压力数据')
+      // P2：sessionQuery/tokenMeter 是可选服务；apply 时因 loader 并发挂载可能取不到（快照误导），改在 execute 时惰性 ctx.get() 判定。
+      const sessionQueryNow = ctx.get('sessionQuery')
+      const tokenMeterNow = ctx.get('tokenMeter')
+      report('sessionQuery（可选）', sessionQueryNow !== undefined,
+        sessionQueryNow !== undefined ? '' : '缺失 -> 会话连续性降级')
+      report('tokenMeter（可选）', tokenMeterNow !== undefined,
+        tokenMeterNow !== undefined ? '' : '缺失 -> ctx_stats 无压力数据')
       report('sessions（可选）', deps.sessions !== undefined)
       report('approval（可选）', deps.approval !== undefined,
         deps.approval !== undefined ? '' : '缺失 -> ask 走 fail-open 放行+警告')

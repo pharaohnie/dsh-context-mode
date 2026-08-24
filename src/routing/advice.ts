@@ -1,8 +1,10 @@
 // routing/advice.ts — systemPrompt.section(order=30) 触发式指引注入
-// 参照上游 context-mode（SKILL + routing-block）的「触发式」做法：MANDATORY 默认规则 + 白名单 + 决策树 + 触发短语，
-// 替代早期「抽象层级 0/1/2/3 + 禁令」。order=30（紧跟 persona/identity 后、任务上下文前），提高「何时用」的关注度。
-// 形状：PromptSection={name,order,text:string|fn,complete?}；无 priority/role；结构编码在 text。
-// 护栏：只约束数据去向，不约束文风。adviceRich=false 回退精简散文（advice.txt）。
+// 参照上游 context-mode（SKILL + routing-block）的「触发式」做法。
+// v2：把「一刀切推 ctx_*」改为「按用途+大小分界」（懂语义→read；大/整目录/统计→ctx_*），
+//     并加「自我调控」信号（本会话读了很多/连读同目录→改 ctx_index(目录)+ctx_search）。
+// 依据：DSH tools/pre-execute 无法做非阻塞软引导（next() 不回流提示、contextNote 只在 deny 送达），
+//       故 runtime 累计/目录信号并入本指引文本，由模型自判（M1/M2/M3）。
+// order=30（紧跟 persona/identity 后、任务上下文前），提高「何时用」的关注度。
 export interface AdviceDeps {
   enabled: boolean
   maxReadBytesBeforeAsk: number
@@ -23,16 +25,20 @@ function buildStructured(deps: AdviceDeps): () => string {
 ## Think in Code — MANDATORY
 分析/统计/过滤/比较/搜索/解析/转换数据 → 用 ctx_execute(language:"${lang}", code) 写程序并只 console.log 答案；原始数据留在沙箱。不要直接把原始数据读进上下文。PROGRAM the analysis, not COMPUTE it.
 
-## 默认规则（MANDATORY：先 context-mode，仅白名单用原生工具）
-默认：读大文件 / 跑命令拿输出 / 抓网页 / 分析汇总 → **先用 ctx_*（ctx_execute / ctx_execute_file / ctx_batch_execute / ctx_fetch_and_index + ctx_search）**。
-只在以下**白名单**场景用原生工具：
+## 判定准则（该 read 还是该用 ctx_*？）
+- **看懂少量小文件**（单个 ≤ ${threshold} 字节、且你要理解其语义/精确内容，如读几行配置、看一个源码文件）→ **read 合理**。
+- **大文件 / 整个目录 / 大量数据 / 需提取统计汇总** → 用 **ctx_***（ctx_index + ctx_search / ctx_execute_file / ctx_execute）。
+- **自我调控**：若本会话你已 read 了**很多文件**（或连续读同一目录多个文件），说明你很在广度通读——改为 **ctx_index(该目录) 一次入库 + 多次定向 ctx_search**，别逐个 read 通读。
+
+## 白名单（原生工具的合法场景）
 - 文件写/状态变更：Write / Edit / git add|commit|push / mkdir / mv / cp / rm / cd / pwd / kill / npm install / echo
 - 确定的小输出观察：pwd / 干净 git status / whoami
 - 编辑文件：Read（Edit 需要精确字节在上下文）
-**其它一切 → ctx_execute / ctx_execute_file。** 不确定时用 context-mode——每 KB 不必要上下文都降低整段会话质量与速度。
 
 ## 决策树（意图 → 工具）
-- 读文件做分析/摘要/抽取 → ctx_execute_file(path, code)（FILE_SRC 引用内容，只回答案）
+- 读文件**做分析/摘要/抽取/统计** → ctx_execute_file(path, code)（FILE_SRC 引用内容，只回答案）
+- 读文件**只是看懂内容/精确几处**（小文件）→ read
+- **整目录/多文件整体理解** → ctx_index(目录) → ctx_search(queries)
 - 跑命令 / 调 API、要处理输出 → ctx_execute(language:"js"|"${lang}", code)
 - 并行多命令 + 同轮检索 → ctx_batch_execute(commands, queries)
 - 抓网页 / 外部文档 → ctx_fetch_and_index(urls) → ctx_search(queries)
@@ -41,7 +47,7 @@ function buildStructured(deps: AdviceDeps): () => string {
 - 数据已在上下文 → 直接用，不要 ctx_index(content:...) 重复索引
 
 ## 触发短语（遇到即用 ctx_*，不用问）
-analyze logs · summarize output · process data · parse JSON · filter results · check build output · run tests · git log / diff · list containers · disk usage · fetch docs · API reference · index documentation · call API · count lines · codebase statistics · dependency audit · 任何可能超 ~20 行的工具输出
+analyze logs · summarize output · process data · parse JSON · filter results · check build output · run tests · git log / diff · list containers · disk usage · fetch docs · index documentation · call API · count lines · codebase statistics · dependency audit · 任何可能超 ~20 行的工具输出
 
 ## Do NOT attempt (host-denied)
 - curl / wget / inline-fetch → 用 ctx_fetch_and_index
@@ -49,7 +55,7 @@ analyze logs · summarize output · process data · parse JSON · filter results
 - ctx_* 的 shell 路由默认关闭 → 用 js/ts，或 ctx_fetch_and_index
 
 ## ctx_execute vs run_code
-ctx_execute = context-mode 受引导的 codeRuntime 封装（带记账/批量/记忆/改道）；run_code = DSH 原生沙箱。底层同 codeRuntime；优先 ctx_execute（受路由/记账）。
+ctx_execute = context-mode 受引导的 codeRuntime 封装（带记账/批量/记忆/改道）；run_code = DSH 原生沙箱。底层同 codeRuntime；优先 ctx_execute。
 
 ## when_not_to_use
 - ctx_search：已有确切内容时；定向 read offset/limit 更省时
@@ -70,10 +76,11 @@ ${trusted} 可全量读，无需先索引（仍设上限防极端大文档）。
 
 function buildLean(deps: AdviceDeps): () => string {
   const threshold = deps.maxReadBytesBeforeAsk
-  return () => `Context-mode (MANDATORY): 默认读大文件/跑命令拿输出/抓网页/分析 → 用 ctx_execute / ctx_execute_file / ctx_batch_execute / ctx_fetch_and_index + ctx_search。仅文件写(git/mkdir/cp/rm)、小输出观察(pwd/whoami)、编辑(Read/Edit)才用原生工具。
-- 读文件做分析 → ctx_execute_file；跑命令/调 API 要处理 → ctx_execute；并行+检索 → ctx_batch_execute；抓网页 → ctx_fetch_and_index。
-- 大文件 > ${threshold} 字节：先 ctx_index 再 ctx_search 取片段；确需分段用带 offset/limit 的精确读。
-- 计算/分析用 ctx_execute(language:"ts", code)，只 console.log 答案；批量用 ctx_batch_execute。
+  return () => `Context-mode (MANDATORY): 看懂少量小文件（≤${threshold} 字节且要理解语义）→ read 合理；大文件/整目录/大量数据/提取统计 → ctx_*（ctx_index+ctx_search / ctx_execute_file / ctx_execute）。
+- 读文件做分析/摘要/统计 → ctx_execute_file；整目录/多文件 → ctx_index(目录)+ctx_search；跑命令/调 API 要处理 → ctx_execute；并行+检索 → ctx_batch_execute；抓网页 → ctx_fetch_and_index。
+- 本会话已 Read 了很多文件 → 改用 ctx_index(目录)+ctx_search。
+- 大文件 > ${threshold} 字节：先 ctx_index 再 ctx_search；确需分段用 read 带 offset/limit。
+- 计算/分析用 ctx_execute(language:"ts", code) 只 console.log 答案；批量用 ctx_batch_execute。
 - 抓网页用 ctx_fetch_and_index（不要 curl/wget）。`
 }
 

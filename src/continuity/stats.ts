@@ -2,7 +2,7 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { computeSavedBytes, getMeta, type KnowledgeDb } from '../knowledge/sqlite.ts'
 
-export interface StatsDeps { kdb: KnowledgeDb | null }
+export interface StatsDeps { kdb: KnowledgeDb | null; accountingLedger?: boolean }
 
 export function registerStats(ctx: {
   tools: { register(def: unknown): unknown }
@@ -36,10 +36,15 @@ export function registerStats(ctx: {
         lines.push(`  检索返还: ${m.search} 字节`)
         // 口径诚实：read 是真实 stat.size（按文件去重）；curl/wget 只有命令串长度，属「下界」而非精确值。
         lines.push(`  拒绝洪水: ${m.readDenied + m.cmdDenied} 字节（read 实际拦截 ${m.readDenied}[精确/去重] + curl/wget 命令串 ${m.cmdDenied}[下界]）`)
+        // P0-1 度量闭环：分类事件（redirect/retrieval/rejected），让 kept_out_pct 更接近官方 measured 口径。
+        // accountingLedger=true 展示明细（默认关，避免噪音）；核心 kept_out_pct 始终展示。
+        if (deps.accountingLedger) {
+          lines.push(`  [明细] 洪水改道(redirect): ${m.redirect} 字节 | 检索命中(retrieval): ${m.retrieval} 字节 | 拒绝回传(rejected): ${m.rejected} 字节`)
+        }
         lines.push(`  沙箱执行: ${executeRuns} 次、返回日志 ${m.executeLog} 字节（成本侧，不计入精确节约）`)
         lines.push(`  记忆捕获: ${memoryChunks} 个 chunk、${getMeta(deps.kdb.db, 'memory_bytes')} 字节`)
         // S7：measured 仅 read 侧口径，与 total 并列，勿单列 measured 当结论
-        lines.push(`  kept_out_pct: measured=${m.keptOutMeasured.toFixed(1)}%（仅 read 侧检测口径，非全量节约） | total=${m.keptOutTotal.toFixed(1)}%（含 索引-检索 粗差 + 命令串下界[估算]）`)
+        lines.push(`  kept_out_pct: measured=${m.keptOutMeasured.toFixed(1)}%（read 侧精确 + 洪水改道[下界]） | total=${m.keptOutTotal.toFixed(1)}%（含 索引-检索 粗差 + 命令串下界[估算]）`)
         lines.push(`  预估节约: ${m.saved} 字节（≈${Math.round(m.saved / 4)} tokens）`)
       } else {
         lines.push('知识库未就绪，无法统计。')

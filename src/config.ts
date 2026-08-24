@@ -44,6 +44,16 @@ export const Config = z.object({
   adviceRich: z.boolean().default(true),
   // P2c 可选记账明细表
   accountingLedger: z.boolean().default(false),
+  // 【新增】结构性有界白名单（P1-2）：无害单命令（白名单 + 无控制运算符）→ 零摩擦放行，不碰长命令 ask。
+  boundedWhitelist: z.array(z.string()).default(['pwd', 'git', 'echo', 'ls', 'cat', 'wc', 'whoami', 'date']),
+  // 【新增】默认安全基线（P0-2，默认关，避免强开打扰）：开启后按 allow/deny glob 对路径/命令做 fail-closed 判定。
+  securityEnabled: z.boolean().default(false),
+  securityAllowGlobs: z.array(z.string()).default([]),
+  securityDenyGlobs: z.array(z.string()).default([]),
+  // P2 搜索 FloodGuard 时间窗节流（对齐官方 SEARCH_WINDOW_MS / SEARCH_MAX_RESULTS_AFTER / SEARCH_BLOCK_AFTER；0=关）
+  searchWindowMs: z.number().default(60_000),
+  searchMaxResultsAfter: z.number().default(3),
+  searchBlockAfter: z.number().default(8),
   // C 会话连续性
   sessionContinuity: z.boolean().default(true),
   continuityTopN: z.number().default(20),
@@ -75,9 +85,78 @@ export interface ContextModeConfig {
   accountingLedger: boolean
   sessionContinuity: boolean
   continuityTopN: number
+  boundedWhitelist: string[]
+  securityEnabled: boolean
+  securityAllowGlobs: string[]
+  securityDenyGlobs: string[]
+  searchWindowMs: number
+  searchMaxResultsAfter: number
+  searchBlockAfter: number
 }
 
 /** 显式默认值：即便 loader 未对 config 应用 schema 默认，也用此兜底。
  *  从 schema 推导（P3-1 单一来源）：schema 默认改了，DEFAULT_CONFIG 自动跟随，避免手写两份漂移。
  *  注：本插件实测 bundle 机制 loader 不应用 schemastery 默认值，故仍需要此兜底（环境事实，README 已记录）。 */
 export const DEFAULT_CONFIG: ContextModeConfig = (Config['~standard'].validate({}) as { value: ContextModeConfig }).value
+
+/** P3-1 环境变量运行时覆盖（对齐官方 env 调参）。优先级：显式 rawConfig > env > DEFAULT_CONFIG。
+ *  读取 CONTEXT_MODE_* 变量，解析为数字/布尔/字符串/数组，仅覆盖存在的键；缺失或空串不覆盖。
+ *  `env` 参数默认可注入：便于测试与在非 Node 环境探测（DSH 主进程必有 process.env）。 */
+export function envConfigOverrides(env: Record<string, string | undefined> = (typeof process !== 'undefined' ? process.env : {})): Partial<ContextModeConfig> {
+  const out: Partial<ContextModeConfig> = {}
+  const num = (keys: string[]): number | undefined => {
+    for (const k of keys) {
+      const v = env[k]
+      if (v !== undefined && v !== '') {
+        const n = Number(v)
+        if (Number.isFinite(n)) return n
+      }
+    }
+    return undefined
+  }
+  const bool = (keys: string[]): boolean | undefined => {
+    for (const k of keys) {
+      const v = env[k]
+      if (v === undefined || v === '') continue
+      const low = v.toLowerCase()
+      if (['1', 'true', 'on', 'yes'].includes(low)) return true
+      if (['0', 'false', 'off', 'no'].includes(low)) return false
+    }
+    return undefined
+  }
+  const list = (keys: string[]): string[] | undefined => {
+    for (const k of keys) {
+      const v = env[k]
+      if (v !== undefined && v !== '') return v.split(',').map((s) => s.trim()).filter(Boolean)
+    }
+    return undefined
+  }
+  // 读阈值/体积（入口覆盖 bash nudge 与 read 门禁）
+  const bashNudge = num(['CONTEXT_MODE_BASH_NUDGE_MIN_COMMAND_BYTES', 'BASH_NUDGE_MIN_COMMAND_BYTES'])
+  if (bashNudge !== undefined) out.bashNudgeMinCommandBytes = bashNudge
+  const maxRead = num(['CONTEXT_MODE_MAX_READ_BYTES', 'CONTEXT_MODE_READ_MAX_BYTES'])
+  if (maxRead !== undefined) out.maxReadBytesBeforeAsk = maxRead
+  // 搜索 FloodGuard 时间窗节流
+  const sw = num(['CONTEXT_MODE_SEARCH_WINDOW_MS'])
+  if (sw !== undefined) out.searchWindowMs = sw
+  const sra = num(['CONTEXT_MODE_SEARCH_MAX_RESULTS_AFTER'])
+  if (sra !== undefined) out.searchMaxResultsAfter = sra
+  const sba = num(['CONTEXT_MODE_SEARCH_BLOCK_AFTER'])
+  if (sba !== undefined) out.searchBlockAfter = sba
+  // 安全
+  const sec = bool(['CONTEXT_MODE_REQUIRE_SECURITY'])
+  if (sec !== undefined) out.securityEnabled = sec
+  const allow = list(['CONTEXT_MODE_ALLOW_GLOBS'])
+  if (allow !== undefined) out.securityAllowGlobs = allow
+  const deny = list(['CONTEXT_MODE_DENY_GLOBS'])
+  if (deny !== undefined) out.securityDenyGlobs = deny
+  // 根目录 / 记忆 / 连续性
+  const dir = env['CONTEXT_MODE_DIR']
+  if (dir) out.knowledgeBaseDir = dir
+  const mem = bool(['CONTEXT_MODE_MEMORY_CAPTURE'])
+  if (mem !== undefined) out.memoryCapture = mem
+  // 调试开关（显式布尔；语义为「是否开启调试」，无反向）
+  const debug = bool(['CONTEXT_MODE_DEBUG'])
+  if (debug !== undefined) out.accountingLedger = debug
+  return out
+}
