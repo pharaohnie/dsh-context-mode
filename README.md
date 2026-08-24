@@ -34,7 +34,7 @@ cd "$HOME/.dsh/plugins/dsh-context-mode"
 
 默认：`$HOME/.dsh/profiles/web/`。如果不是，改用你自己的 profile 目录。后续命令里的 `PROFILE_DIR` 指它。
 
-如果 `PROFILE_DIR` 下没有 `pnpm-workspace.yaml`，说明该 profile 不是 pnpm 工作区，**先停**——本插件依赖 workspace 协议，普通 pnpm 项目也能用但符号链接行为不同，请改用「作为发布包」一节。
+如果 `PROFILE_DIR` 下没有 `pnpm-workspace.yaml`，说明该 profile 不是 pnpm 工作区，**先停**——本插件依赖 workspace 协议（避免 `link:` 协议下符号链接被 pnpm 重建为错误层级的问题），非工作区 profile 不适用，告诉用户这个事实。
 
 ### 4. 修改 `pnpm-workspace.yaml`
 
@@ -131,16 +131,6 @@ dsh restart
 | `duplicate loader entry id: context-mode` 启动失败 | `dsh.profile.bundles` 里同时有 `dsh-context-mode` | 从 bundles 数组里删除那一项 |
 | `ERR_MODULE_NOT_FOUND`（如找不到 `@deepseek-ai/dsh-tools`） | 插件自己的 `node_modules` symlink 指向了旧 DSH npx 缓存 | 跑 `~/.dsh/plugins/dsh-context-mode/relink-dsh-context-mode.sh` |
 | `ctx_doctor` 显示 `✗ read 整读门禁` | `routingEnabled: false` | 默认 true；显式设了 `false` 改回，或在 `cordis.patch.yml` 的 insert 行加 `config: { routingEnabled: true }`（但会让 dshmarket 热挂载失败，需重启才生效） |
-
-### 作为发布包
-
-如果不想用 workspace（profile 不是 pnpm 项目），改用：
-
-```bash
-dsh plugin add dsh-context-mode
-```
-
-然后在 `dsh.profile.bundles` 加 `"dsh-context-mode"`，重启。这种方式 dshmarket 会管 bundles 登记，但**符号链接会复发坏链接**（dshmarket update 重建时会用 `link:` 行为），不推荐用于本地长期使用。
 
 > 依赖自愈：DSH 经 `npx` 更新后，插件 `node_modules` 可能还指着旧 npx 缓存，报 `ERR_MODULE_NOT_FOUND`。跑一次插件目录的 `./relink-dsh-context-mode.sh`（或重新 `pnpm install`）即可。脚本只重设那个 symlink，不动配置和数据。
 
