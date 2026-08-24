@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "DSH context-window relief: knowledge base (ctx_index/search), routing enforcement (deny flood tools), and session continuity (post-compaction restore).",
   "type": "module",
-  "main": "./dist/index.js",
+  "main": "./src/index.ts",
   "license": "MIT",
   "keywords": [
     "dsh-plugin",
@@ -14,7 +14,7 @@
     "plugin"
   ],
   "exports": {
-    ".": "./dist/index.js",
+    ".": "./src/index.ts",
     "./package.json": "./package.json"
   },
   "files": [

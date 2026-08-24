@@ -10,6 +10,9 @@ dist/
 tmp/
 *.swp
 
+# AgentTeams 运行期工作状态（成员信箱 / team.json / 已退休成员，不入库）
+.agent-teams/
+
 # 本地 db / 测试产物（知识库 db 实际在 ~/.context-mode，不在仓库内）
 *.db
 *.sqlite
