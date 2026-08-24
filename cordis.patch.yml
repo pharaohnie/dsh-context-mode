@@ -1,7 +1,8 @@
 # context-mode bundle 自带的组合 patch：把自己的插件行注入宿主 composition
 # 机制同 my-custom-inject：bundle 的 dsh.bundle.patch 指向本文件，loader 据此 `insert` 插件行。
+# 注意：保持纯 insert（id + name），不要加 config 行——
+# dshmarket 的 parseSimplePatch 只接受纯 insert，带 config 会判定为"复杂 patch"，
+# 从而拒绝热挂载（只能重启生效）。routingEnabled 默认值即为 true，无需显式配置。
 - insert:
     - id: context-mode
       name: 'dsh-context-mode'
-      config:
-        routingEnabled: true
