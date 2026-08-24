@@ -4,6 +4,14 @@
   "description": "DSH context-window relief: knowledge base (ctx_index/search), routing enforcement (deny flood tools), and session continuity (post-compaction restore).",
   "type": "module",
   "license": "MIT",
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "context-window",
+    "knowledge-base",
+    "fts5",
+    "plugin"
+  ],
   "exports": {
     ".": "./src/index.ts",
     "./package.json": "./package.json"
