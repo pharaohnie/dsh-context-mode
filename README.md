@@ -28,7 +28,7 @@ git clone https://github.com/pharaohnie/dsh-context-mode.git "$HOME/.dsh/plugins
 cd "$HOME/.dsh/plugins/dsh-context-mode"
 ```
 
-预期：目录下出现 `package.json`、`cordis.patch.yml`、`README.md`、`src/`、`dist/`、`scripts/`、`skills/`。
+预期：目录下出现 `package.json`、`cordis.patch.yml`、`README.md`、`src/`、`scripts/`、`skills/`。
 
 ### 3. 定位 profile 目录
 
@@ -206,5 +206,7 @@ Schemastery schema 定义，默认知识库在 `~/.context-mode/content`。大�
 ## 运行环境
 
 DSH `v0.1.1-rc.2`，Node ≥ 24（`node:sqlite` 自带 FTS5，免编译；type-stripping 直接加载 `.ts`）。知识库走 WAL 模式，多进程共享时防写锁。
+
+**入口即源码**：`package.json` 的 `main` 指向 `src/index.ts`，依赖上述 type-stripping 能力，无构建产物（`dist/` 已移除，`src/` 是唯一事实源）。发布前需按官方规范补 `"prepare": "tsc -p tsconfig.json"` 并把 `main` 切到 `dist/index.js`（动作清单见 `COMPLIANCE_FIX_PLAN.md` 3c 方案 B 留档）。
 
 纯逻辑回归跑 `node scripts/smoke.ts`：覆盖 FloodGuard 分桶、chunkStats、advice 构建、SSRF 防护、FTS5 非法查询转义、read 门禁判定。不需要 DSH 运行时，Node 直跑。

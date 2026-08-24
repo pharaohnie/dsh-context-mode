@@ -18,7 +18,6 @@
     "./package.json": "./package.json"
   },
   "files": [
-    "dist",
     "src",
     "skills",
     "cordis.patch.yml",
@@ -40,11 +39,5 @@
   "peerDependencies": {
     "@deepseek-ai/dsh-tools": "*",
     "@deepseek-ai/schemastery": "*"
-  },
-  "scripts": {
-    "build": "tsc -p tsconfig.json"
-  },
-  "devDependencies": {
-    "typescript": "^5.8.0"
   }
 }
