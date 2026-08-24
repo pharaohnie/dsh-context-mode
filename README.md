@@ -4,34 +4,143 @@ DSH（DeepSeek Harness）的上下文减负插件。核心就一句话：让越�
 
 它做三件事：大文件、网页索引进本地知识库，用检索片段代替整读；curl/wget、超长 read 这类洪水工具拦下来改道；数据处理丢进沙箱，只把答案带回来。它不做别的。
 
-## 安装
+## 安装（写给 agent 的逐步指令）
 
-### 作为 profile 插件（本地 workspace 形态，推荐）
+> 适用：DSH profile 通过 pnpm 管理依赖、`nodeLinker: hoisted`、Node ≥ 24。目标是把插件钉进 composition，使其在所有 dshmarket 安装/卸载操作下**持久生效且不报错**。
 
-用 pnpm **workspace 协议** + profile 的 **patch 层 insert** 部署，两层都抗 dshmarket 的操作：
+### 前置条件
 
-1. `package.json` 的 `dependencies` 加 `"dsh-context-mode": "workspace:*"`。
-2. `pnpm-workspace.yaml` 的 `packages` 数组加插件目录的**绝对路径**（如 `/Users/you/.dsh/plugins/dsh-context-mode`）。
-3. 在 profile 目录跑 `pnpm install`。
-4. **不要**把 `"dsh-context-mode"` 加进 `dsh.profile.bundles`。改为在 profile 根目录的 `cordis.patch.yml`（用户 patch 层，loader 每次启动都应用）里 insert 插件行：
+- DSH 已装好并能启动一个 profile（默认 `~/.dsh/profiles/web/`）
+- pnpm ≥ 11 可用（`pnpm --version` 返回版本号）
+- Node ≥ 24（`node --version` 返回 `v24.x`）
+- git 可用
 
-   ```yaml
-   - insert:
-       - id: context-mode
-         name: 'dsh-context-mode'
-   ```
+### 1. 决定插件目录
 
-5. 重启 DSH，用 `ctx_doctor` 自检。`codeRuntime`、知识库、read 门禁都该是 ✓。
+**推荐目录**：`$HOME/.dsh/plugins/dsh-context-mode`（与 `~/.dsh/plugins/my-custom-inject` 同级）。
 
-为什么不用 bundles 登记：
+如果目录已存在但 `git log -1` 不是本仓库，说明是旧版残留，**删掉重来**（`rm -rf ~/.dsh/plugins/dsh-context-mode`），不要在旧目录上 `git pull`。
 
-- **`link:` 协议会复发坏链接**：pnpm 对 `link:` 依赖以 `node_modules/.pnpm` 为基准重建符号链接（hoisted 布局下层级错误，解析到不存在的路径），dshmarket 因此报「未安装 / not installed」。`workspace:` 协议用正确基准，pnpm 重排不会弄坏。
-- **bundles 登记会被冲掉**：dshmarket 安装/卸载/更新其他插件时重写 `package.json`，`dsh.profile.bundles` 里的登记可能丢失。patch 层 insert 每次启动都应用，行不会丢。
-- **两者不能同时存在**：bundle 层的 `cordis.patch.yml` 和 patch 层 insert 都插 `id: context-mode`，重复 loader entry id 会让 cordis 拒绝启动（`duplicate loader entry id: context-mode`）。选 patch 层一种即可，记得检查 `package.json` 的 `dsh.profile.bundles` 里**不要**有 `dsh-context-mode`。
+### 2. 克隆仓库
+
+```bash
+git clone https://github.com/pharaohnie/dsh-context-mode.git "$HOME/.dsh/plugins/dsh-context-mode"
+cd "$HOME/.dsh/plugins/dsh-context-mode"
+```
+
+预期：目录下出现 `package.json`、`cordis.patch.yml`、`README.md`、`src/`、`dist/`、`scripts/`、`skills/`。
+
+### 3. 定位 profile 目录
+
+默认：`$HOME/.dsh/profiles/web/`。如果不是，改用你自己的 profile 目录。后续命令里的 `PROFILE_DIR` 指它。
+
+如果 `PROFILE_DIR` 下没有 `pnpm-workspace.yaml`，说明该 profile 不是 pnpm 工作区，**先停**——本插件依赖 workspace 协议，普通 pnpm 项目也能用但符号链接行为不同，请改用「作为发布包」一节。
+
+### 4. 修改 `pnpm-workspace.yaml`
+
+把插件目录加进 `packages` 数组（保持其他项不动）：
+
+```bash
+# 用 Edit 工具在 pnpm-workspace.yaml 的 packages 列表里加上插件绝对路径
+```
+
+示例（修改后，`packages` 项下）：
+
+```yaml
+packages:
+  - .
+  - /Users/yourname/.dsh/plugins/dsh-context-mode
+```
+
+### 5. 修改 `package.json`（profile 目录）
+
+`dependencies` 里加：
+
+```json
+"dsh-context-mode": "workspace:*"
+```
+
+**重要**：`dsh.profile.bundles` 里**不要**有 `dsh-context-mode`——本插件改用 patch 层 insert（下一步），两者同时存在会触发 `duplicate loader entry id: context-mode`，cordis 拒绝启动。如果之前按旧版 README 加过，从 bundles 数组里删掉。
+
+### 6. 修改 `cordis.patch.yml`（profile 根目录）
+
+这是用户 patch 层，DSH loader 每次启动都会应用，比 `dsh.profile.bundles` 更持久（dshmarket 安装/卸载其他插件会重写 `package.json`，bundles 里的登记可能丢失，patch 层不会）。
+
+文件通常已存在（dshmarket 写 disabled 标记也会写它），可能是 `[]` 或已有 disable 块。在文件**末尾追加**：
+
+```yaml
+- insert:
+    - id: context-mode
+      name: 'dsh-context-mode'
+```
+
+格式严格要求：
+- 顶格写 `- insert:`（不是缩进）
+- 下一行 `    - id: ...`（4 空格缩进）
+- `name` 字段必须是字符串 `'dsh-context-mode'`（插件 package.json 的 name）
+
+`yaml.safe_load` 必须能解析为合法数组。用下面任一命令验证：
+
+```bash
+python3 -c "import yaml; print(yaml.safe_load(open('cordis.patch.yml')))"
+```
+
+```bash
+node -e 'console.log(require("js-yaml").load(require("fs").readFileSync("cordis.patch.yml","utf8")))'
+```
+
+### 7. 跑 pnpm install
+
+```bash
+cd "$PROFILE_DIR"
+pnpm install --config.minimumReleaseAge=0
+```
+
+`--config.minimumReleaseAge=0` 绕过 dshmarket 的发布时间策略（如果你的 profile 里其他包的锁文件条目是今天发布的）。如果不需要可去掉。
+
+预期：`node_modules/dsh-context-mode` 是符号链接，用 `readlink node_modules/dsh-context-mode` 应返回形如 `../../plugins/dsh-context-mode`（3 层相对路径）的字符串，`realpath` 解析为插件绝对路径，`package.json` 可读。
+
+### 8. 重启 DSH
+
+```bash
+dsh restart
+# 或在 dshmarket UI 点「重启」
+```
+
+### 9. 验证
+
+跑 `ctx_doctor`，预期输出（每行一个 ✓ 或 ✗，关键项都是 ✓）：
+
+- ✓ tools（硬）
+- ✓ systemPrompt（硬）
+- ✓ codeRuntime（执行 substrate）
+- ✓ read 整读门禁 — 已启用
+- ✓ 结构白名单（boundedWhitelist）
+- ✓ 搜索 FloodGuard
+- ✓ 知识库建表
+- ✓ 知识库分片 — live N / expired 0 / total N
+- ✓ FTS5 冒烟
+
+跑 `curl http://127.0.0.1:3080/dsh-market/installed | python3 -c "import json,sys; d=json.load(sys.stdin); v=d['activation']['dsh-context-mode']; print(v['state'], v['hot'])"`，预期：`live True`。
+
+### 故障排查
+
+| 症状 | 原因 | 修复 |
+|---|---|---|
+| `dshmarket` 状态显示「未安装 / not installed」 | `node_modules/dsh-context-mode` 符号链接坏（`realpath` 不存在） | 重跑 `pnpm install --config.minimumReleaseAge=0`；若仍坏，确认用 `workspace:*` 而非 `link:` |
+| `duplicate loader entry id: context-mode` 启动失败 | `dsh.profile.bundles` 里同时有 `dsh-context-mode` | 从 bundles 数组里删除那一项 |
+| `ERR_MODULE_NOT_FOUND`（如找不到 `@deepseek-ai/dsh-tools`） | 插件自己的 `node_modules` symlink 指向了旧 DSH npx 缓存 | 跑 `~/.dsh/plugins/dsh-context-mode/relink-dsh-context-mode.sh` |
+| `ctx_doctor` 显示 `✗ read 整读门禁` | `routingEnabled: false` | 默认 true；显式设了 `false` 改回，或在 `cordis.patch.yml` 的 insert 行加 `config: { routingEnabled: true }`（但会让 dshmarket 热挂载失败，需重启才生效） |
 
 ### 作为发布包
 
-`dsh plugin add dsh-context-mode`（或在 profile `dependencies` 加包名），在 `dsh.profile.bundles` 登记后重启。
+如果不想用 workspace（profile 不是 pnpm 项目），改用：
+
+```bash
+dsh plugin add dsh-context-mode
+```
+
+然后在 `dsh.profile.bundles` 加 `"dsh-context-mode"`，重启。这种方式 dshmarket 会管 bundles 登记，但**符号链接会复发坏链接**（dshmarket update 重建时会用 `link:` 行为），不推荐用于本地长期使用。
 
 > 依赖自愈：DSH 经 `npx` 更新后，插件 `node_modules` 可能还指着旧 npx 缓存，报 `ERR_MODULE_NOT_FOUND`。跑一次插件目录的 `./relink-dsh-context-mode.sh`（或重新 `pnpm install`）即可。脚本只重设那个 symlink，不动配置和数据。
 
