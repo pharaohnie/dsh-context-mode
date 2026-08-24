@@ -60,7 +60,7 @@ export function registerKnowledgeTools(ctx: { tools: { register(def: unknown): u
 
   ctx.tools.register(defineTool({
     name: 'ctx_index',
-    description: '把本地文件或目录索引为知识库。按标题切分、保留代码块，写入 FTS5 双表（porter 词根 + trigram 子串）。结果供 ctx_search 检索。',
+    description: '索引到知识库：把本地文件或目录切片（按标题、保留代码块），写入 FTS5 双表（porter 词根 + trigram 子串）。何时用：需要处理/复用大文件或目录内容、供后续检索时（先 index 再 ctx_search），代替一次性整读。',
     parameters: {
       paths: { type: 'array', required: true, items: { type: 'string' }, description: '文件或目录路径，递归收集' },
       ttlMs: { type: 'number', description: '覆盖默认 TTL（毫秒）' },
@@ -86,7 +86,7 @@ export function registerKnowledgeTools(ctx: { tools: { register(def: unknown): u
 
   ctx.tools.register(defineTool({
     name: 'ctx_search',
-    description: '在知识库里检索：porter 词根 + trigram 子串双策略 BM25，RRF 合并，返回命中片段（词前后窗口）。支持 queries[] 批量、sort(timeline/relevance)、source(ref 前缀过滤)。大输出先走索引再检索，省上下文。',
+    description: '在知识库里检索：porter 词根 + trigram 子串双策略 BM25，RRF 合并，返回命中片段（词前后窗口）。何时用：从已索引内容取所需片段时；把相关问题一次问清（queries 批量）。不要重复检索已在上下文里的内容。',
     parameters: {
       query: { type: 'string', description: '检索词（给单一 query 时用；与 queries 同时给则以 queries 为准）' },
       queries: { type: 'array', items: { type: 'string' }, description: '批量检索词，一次往返' },
@@ -131,7 +131,7 @@ export function registerKnowledgeTools(ctx: { tools: { register(def: unknown): u
 
   ctx.tools.register(defineTool({
     name: 'ctx_fetch_and_index',
-    description: '抓取一个或多个 URL，转 markdown、切片、入库（TTL 默认 24h、可覆盖）。',
+    description: '抓取一个或多个 URL，转 markdown、切片、入库（TTL 默认 24h、可覆盖）。何时用：抓网页/外部文档并入库检索，原始页面字节不进上下文；代替 curl/wget/WebFetch 直读。抓后 ctx_search。',
     parameters: {
       urls: { type: 'array', required: true, items: { type: 'string' }, description: 'URL 列表' },
       ttlMs: { type: 'number', description: '覆盖默认 TTL' },
@@ -164,7 +164,7 @@ export function registerKnowledgeTools(ctx: { tools: { register(def: unknown): u
 
   ctx.tools.register(defineTool({
     name: 'ctx_purge',
-    description: '清空知识库所有 chunk（含 FTS 索引同步）。',
+    description: '永久清空知识库所有 chunk（含 FTS 索引同步）。不可逆；仅在要彻底重置知识库时用。',
     parameters: {},
     output: { schema: textSchema, render: (_args: unknown, v: { text: string }) => [{ type: 'text', text: v.text }] as any },
     async execute() {

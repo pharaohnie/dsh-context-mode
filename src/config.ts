@@ -11,8 +11,8 @@ export const Config = z.object({
   routingEnabled: z.boolean().default(true),
   // 硬 deny curl/wget/inline-fetch（不参与 fail-open 降级）
   denyCurlWget: z.boolean().default(true),
-  // 无界 bash 首命令词+字节阈值；0 = 不触发
-  bashNudgeMinCommandBytes: z.number().default(0),
+  // 无界 bash 首命令词+字节阈值；0 = 不触发（早期默认关闭）。P1 软引导：>0 且超阈值时，对长 bash 给「改用 ctx_*」的软提示（有审批 ask、无审批放行）。
+  bashNudgeMinCommandBytes: z.number().default(1000),
   // 整读引导（deny）阈值：stat.size > 该值才触发 deny+引导。对齐 read 工具自身 readMaxBytes（≈50KB=51200）。
   // 注：字段名带 ask 但实为 deny 阈值——语义别名见下方 readFloodDenyBytes 注释；maxReadBytesBeforeAsk 保留为兼容键。
   maxReadBytesBeforeAsk: z.number().default(51200),

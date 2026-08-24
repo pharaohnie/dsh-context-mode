@@ -77,7 +77,7 @@ export function registerExecuteTools(ctx: { tools: { register(def: unknown): unk
 
   ctx.tools.register(defineTool({
     name: 'ctx_execute',
-    description: '在沙箱里运行模型写的一段程序（Think-in-Code），只把 stdout+返回值得回上下文，原始数据留在沙箱。适合分析/统计/过滤/比较/搜索/解析/转换数据；console.log 只打印答案。禁写宿主 FS（默认不注入 fs binding，设计取向）。',
+    description: '在沙箱里运行模型写的一段程序（Think-in-Code），只把 stdout+返回值得回上下文，原始数据留在沙箱。何时用：分析/统计/过滤/比较/搜索/解析/转换数据、跑程序/调 API、处理大输出时——代替 bash 直跑拿大输出。console.log 只打印答案。',
     parameters: {
       language: { type: 'string', enum: ['ts', 'typescript', 'js', 'shell', 'bash'], description: '默认 ts；shell 需开启 executeAllowShell' },
       code: { type: 'string', required: true, description: '程序体（async function body，支持顶层 await/return，返回值即 value）' },
@@ -95,7 +95,7 @@ export function registerExecuteTools(ctx: { tools: { register(def: unknown): unk
 
   ctx.tools.register(defineTool({
     name: 'ctx_execute_file',
-    description: '读一个文件的内容作为数据（FILE_SRC），对其运行一段分析代码，只把结果带回。语义：读取目标文件内容并对其运行分析 code，而非执行目标文件本体（源文件多为非入口，执行会失败）。code 缺省时返回 FILE_SRC.length。',
+    description: '读一个文件的内容作为数据（FILE_SRC），对其运行一段分析代码，只把结果带回。何时用：读文件做分析/摘要/抽取时，文件内容作为 FILE_SRC 留在沙箱，只回答案——代替整读大文件进上下文。',
     parameters: {
       path: { type: 'string', required: true, description: '要作为数据分析的文件路径' },
       language: { type: 'string', enum: ['ts', 'typescript', 'js', 'shell', 'bash'], description: '分析代码语言，默认 ts' },
@@ -128,7 +128,7 @@ export function registerExecuteTools(ctx: { tools: { register(def: unknown): unk
 
   ctx.tools.register(defineTool({
     name: 'ctx_batch_execute',
-    description: '并行跑多段程序、各自结果自动入库（batch:<sid>:<hash>），同轮可用 queries 检索命中片段。一调多用替代多次分开调用；并发 1-8（每个 worker 占一个空环境+heap cap，内存随 N 倍增长）。',
+    description: '并行跑多段程序、各自结果自动入库（batch:<sid>:<hash>），同轮可用 queries 检索命中片段。何时用：一次要并行多段计算/命令并同轮检索时，一调多用替代多次分开调用；并发 1-8。',
     parameters: {
       commands: { type: 'array', required: true, items: { type: 'string' }, description: '一段段程序' },
       queries: { type: 'array', items: { type: 'string' }, description: '同轮检索词（对已入库结果取片段）' },

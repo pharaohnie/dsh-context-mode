@@ -122,17 +122,14 @@ export function registerGate(ctx: {
           return { kind: 'deny', reason }
         }
       }
-      // ② 无界 bash 长命令 -> ask（带 fail-open）
+      // ② 无界 bash 长命令 -> ask（处理意图：软引导，无审批通道时放行）
       if (name === 'bash' && deps.config.bashNudgeMinCommandBytes > 0) {
         const len = typeof args.command === 'string' ? args.command.length : 0
         if (len > deps.config.bashNudgeMinCommandBytes) {
-          const reason = `context-mode: 这条 bash 命令较长（约 ${len} 字节 > 阈值 ${deps.config.bashNudgeMinCommandBytes}），建议先索引再检索（ctx_index/ctx_search）或改用 run_code 沙箱。`
-          // P0 修复：无审批通道时 ask 按官方 tools/pre-execute 契约降级为 deny（fail-closed），而非放行+警告。
-          if (!deps.hasApproval()) {
-            reject(reason)
-            return { kind: 'deny', reason: `${reason}（当前无审批通道，ask 已降级为 deny——请先索引再检索，或用 run_code 沙箱。）` }
-          }
-          return { kind: 'ask', reason }
+          const reason = `context-mode: 这条 bash 命令较长（约 ${len} 字节 > 阈值 ${deps.config.bashNudgeMinCommandBytes}），且看起来要拿到较大输出。若你要对结果做分析/计数/过滤/多查询，请改用 ctx_execute(language:"ts", code) 或 ctx_batch_execute(commands, queries)（沙箱里只回答案）；确需看输出用 read 带 offset/limit。`
+          // P1 软引导：有审批时 ask（把改用 ctx_* 的提示交给模型/用户裁决）；无审批通道时放行（绝不误拦合法命令）。
+          if (deps.hasApproval()) return { kind: 'ask', reason }
+          return next()
         }
       }
       // ③ ctx_execute* 安全审查（S1：洪水/长命令判定针对 arguments.code，勿复用只认 bash 的 floodReason）
