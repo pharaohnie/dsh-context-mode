@@ -6,14 +6,28 @@ DSH（DeepSeek Harness）的上下文减负插件。核心就一句话：让越�
 
 ## 安装
 
-### 作为 profile 插件（本地 link 形态）
+### 作为 profile 插件（本地 workspace 形态，推荐）
 
-在 DSH profile 的 `package.json` 里：
+用 pnpm **workspace 协议** + profile 的 **patch 层 insert** 部署，两层都抗 dshmarket 的操作：
 
-1. `dependencies` 加 `"dsh-context-mode": "link:/绝对路径/到/插件目录"`（或 `../` 相对路径）。
-2. `dsh.profile.bundles` 数组加 `"dsh-context-mode"`。
+1. `package.json` 的 `dependencies` 加 `"dsh-context-mode": "workspace:*"`。
+2. `pnpm-workspace.yaml` 的 `packages` 数组加插件目录的**绝对路径**（如 `/Users/you/.dsh/plugins/dsh-context-mode`）。
 3. 在 profile 目录跑 `pnpm install`。
-4. 重启 DSH，用 `ctx_doctor` 自检。`codeRuntime`、知识库、read 门禁都该是 ✓。
+4. **不要**把 `"dsh-context-mode"` 加进 `dsh.profile.bundles`。改为在 profile 根目录的 `cordis.patch.yml`（用户 patch 层，loader 每次启动都应用）里 insert 插件行：
+
+   ```yaml
+   - insert:
+       - id: context-mode
+         name: 'dsh-context-mode'
+   ```
+
+5. 重启 DSH，用 `ctx_doctor` 自检。`codeRuntime`、知识库、read 门禁都该是 ✓。
+
+为什么不用 bundles 登记：
+
+- **`link:` 协议会复发坏链接**：pnpm 对 `link:` 依赖以 `node_modules/.pnpm` 为基准重建符号链接（hoisted 布局下层级错误，解析到不存在的路径），dshmarket 因此报「未安装 / not installed」。`workspace:` 协议用正确基准，pnpm 重排不会弄坏。
+- **bundles 登记会被冲掉**：dshmarket 安装/卸载/更新其他插件时重写 `package.json`，`dsh.profile.bundles` 里的登记可能丢失。patch 层 insert 每次启动都应用，行不会丢。
+- **两者不能同时存在**：bundle 层的 `cordis.patch.yml` 和 patch 层 insert 都插 `id: context-mode`，重复 loader entry id 会让 cordis 拒绝启动（`duplicate loader entry id: context-mode`）。选 patch 层一种即可，记得检查 `package.json` 的 `dsh.profile.bundles` 里**不要**有 `dsh-context-mode`。
 
 ### 作为发布包
 
