@@ -10,9 +10,18 @@ const restoredFingerprints = new Map<string, string>()
 const FINGERPRINT_CAP = 256 // 宿主任期保护：限制进程级指纹 Map 大小，超出淘汰最旧，防无界增长
 
 export interface RestoreDeps {
-  config: { sessionContinuity: boolean; continuityTopN: number; memoryCapture: boolean; memoryTtlMs: number; memoryResumeTopN: number; memoryResumeBytes: number }
+  config: { sessionContinuity: boolean; continuityTopN: number; memoryCapture: boolean; memoryTtlMs: number; memoryResumeTopN: number; memoryResumeBytes: number; subagentGuidance: boolean }
   kdb: KnowledgeDb | null
 }
+
+/** 子代理上下文守卫（对齐官方 Agent 分支）：给子代理注入精简 context_window_protection 指令，
+ *  告知其用 ctx_* 及检索而非整读大文件，防子代理绕过父会话门禁。默认关（subagentGuidance）。 */
+const SUBAGENT_GUARD_BLOCK = `# context_window_protection
+你在子代理中独立完成任务。为不浪费上下文窗口：
+- 大文件 / 大输出 / 目录 → 用 ctx_index + ctx_search（或 ctx_execute_file），不要整读。
+- 分析/统计/过滤/转换数据 → 用 ctx_execute(language:"ts", code) 只打印答案，原始数据留在沙箱。
+- 抓网页/文档 → ctx_fetch_and_index → ctx_search；不要 curl/wget。
+- 只看懂少量小文件（≤51200 字节）可 read；带 offset/limit 精确读可 read。`
 
 const P1_P2_TYPES = ['user/message', 'assistant/message', 'tool/call', 'tool/result']
 const COMPACTION_TYPES = ['compaction/summary', 'compaction/prune']
@@ -25,8 +34,21 @@ export function registerRestore(ctx: {
   ctx.on('agent/session-start' as never, async (payload: any) => {
     const agent = payload?.agent
     if (!agent) return
-    // H2：subagent 会话不注入恢复上下文（污染子代理）
-    if (agent.origin === 'subagent' || agent.parentSession !== undefined) return
+    // H2：subagent 会话不注入完整恢复上下文（污染子代理）。
+    // 若 subagentGuidance 开启（对齐官方 Agent 分支）：给子代理注入简短的 context_window_protection 保护块，防其绕过门禁整读。
+    if (agent.origin === 'subagent' || agent.parentSession !== undefined) {
+      if (deps.config.subagentGuidance && typeof agent.inject === 'function') {
+        try {
+          agent.inject({
+            id: crypto.randomUUID(),
+            role: 'user',
+            content: [{ type: 'text', text: SUBAGENT_GUARD_BLOCK }],
+            source: { kind: 'plugin', plugin: 'context-mode' },
+          })
+        } catch { /* 注入失败静默，不阻塞 */ }
+      }
+      return
+    }
     const sid: string = agent.sessionId
     if (!sid) return
     const sq = ctx.get('sessionQuery') as { filterEvents?: (id: string, f: unknown[]) => Promise<unknown[]> } | undefined

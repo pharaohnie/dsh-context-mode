@@ -57,6 +57,8 @@ export const Config = z.object({
   // C 会话连续性
   sessionContinuity: z.boolean().default(true),
   continuityTopN: z.number().default(20),
+  // 【新增】子代理上下文守卫（对齐官方 Agent 分支：给子代理注入 context_window_protection 保护块，防其绕过门禁整读）。默认关。
+  subagentGuidance: z.boolean().default(false),
 })
 
 export interface ContextModeConfig {
@@ -92,6 +94,7 @@ export interface ContextModeConfig {
   searchWindowMs: number
   searchMaxResultsAfter: number
   searchBlockAfter: number
+  subagentGuidance: boolean
 }
 
 /** 显式默认值：即便 loader 未对 config 应用 schema 默认，也用此兜底。
@@ -155,6 +158,8 @@ export function envConfigOverrides(env: Record<string, string | undefined> = (ty
   if (dir) out.knowledgeBaseDir = dir
   const mem = bool(['CONTEXT_MODE_MEMORY_CAPTURE'])
   if (mem !== undefined) out.memoryCapture = mem
+  const sub = bool(['CONTEXT_MODE_SUBAGENT_GUIDANCE'])
+  if (sub !== undefined) out.subagentGuidance = sub
   // 调试开关（显式布尔；语义为「是否开启调试」，无反向）
   const debug = bool(['CONTEXT_MODE_DEBUG'])
   if (debug !== undefined) out.accountingLedger = debug

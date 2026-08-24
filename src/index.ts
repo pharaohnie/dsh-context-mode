@@ -144,6 +144,7 @@ export function apply(ctx: {
       memoryTtlMs: config.memoryTtlMs,
       memoryResumeTopN: config.memoryResumeTopN,
       memoryResumeBytes: config.memoryResumeBytes,
+      subagentGuidance: config.subagentGuidance,
     },
     kdb,
   })
