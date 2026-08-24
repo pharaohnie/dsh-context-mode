@@ -64,7 +64,7 @@ analyze logs · summarize output · process data · parse JSON · filter results
 ## Do NOT attempt (host-denied)
 - curl / wget / inline-fetch → 用 ctx_fetch_and_index
 - read > ${threshold} 字节(≈${thresholdTokens} tokens) whole → denied；用 ctx_index+ctx_search，或 read 带**有界** offset/limit（limit ≤ ${threshold}）
-- ctx_* 的 shell 路由默认关闭 → 用 js/ts，或 ctx_fetch_and_index
+- ctx_* 的 shell 路由已被显式关闭 → 用 js/ts，或 ctx_fetch_and_index
 
 ## ctx_execute vs run_code
 ctx_execute = context-mode 受引导的 codeRuntime 封装（带记账/批量/记忆/改道）；run_code = DSH 原生沙箱。底层同 codeRuntime；优先 ctx_execute。

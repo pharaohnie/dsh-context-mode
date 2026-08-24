@@ -51,12 +51,12 @@ export async function runSandbox(ctx: { get(name: string): unknown }, code: stri
   const lang = (language || 'ts').toLowerCase()
   if (lang === 'shell' || lang === 'bash') {
     const shell = ctx.get('shell') as { run?: (spec: any) => Promise<any> } | undefined
-    if (!shell || typeof shell.run !== 'function') throw new Error('context-mode: shell 不可用（executeAllowShell 需开启且宿主挂载 shell）')
+    if (!shell || typeof shell.run !== 'function') throw new Error('context-mode: shell 服务不可用（DSH 宿主未挂载 shell；executeAllowShell 仅控制本插件是否放行 shell 路由）')
     const res = await shell.run({ command: code, signal: opts.signal, timeoutMs: opts.timeoutMs || undefined })
     const out = [res?.stdout, res?.stderr].filter((x) => typeof x === 'string').join('\n')
     return { text: out, count: 1 }
   }
-  if (lang !== 'ts' && lang !== 'typescript' && lang !== 'js') throw new Error(`context-mode: 不支持语言 ${lang}（当前仅 ts/typescript/js；shell 需开启 executeAllowShell）`)
+  if (lang !== 'ts' && lang !== 'typescript' && lang !== 'js') throw new Error(`context-mode: 不支持语言 ${lang}（当前支持 ts/typescript/js 与 shell/bash）`)
   const rt = ctx.get('codeRuntime') as { run?: (req: any) => Promise<any> } | undefined
   if (!rt || typeof rt.run !== 'function') throw new Error('context-mode: codeRuntime 未挂载（宿主未提供）')
   const res = await rt.run({ program: code, bindings: [], signal: opts.signal })
@@ -81,7 +81,7 @@ export function registerExecuteTools(ctx: { tools: { register(def: unknown): unk
     name: 'ctx_execute',
     description: '在沙箱里运行模型写的一段程序（Think-in-Code），只把 stdout+返回值得回上下文，原始数据留在沙箱。何时用：分析/统计/过滤/比较/搜索/解析/转换数据、跑程序/调 API、处理大输出时——代替 bash 直跑拿大输出。当你要处理/分析/汇总大输出、或跑命令要拿结果时用，结果只回答案，原始数据留沙箱。',
     parameters: {
-      language: { type: 'string', enum: ['ts', 'typescript', 'js', 'shell', 'bash'], description: '默认 ts；shell 需开启 executeAllowShell' },
+      language: { type: 'string', enum: ['ts', 'typescript', 'js', 'shell', 'bash'], description: '默认 ts；shell 路由默认开启（executeAllowShell=true）' },
       code: { type: 'string', required: true, description: '程序体（async function body，支持顶层 await/return，返回值即 value）' },
       timeoutMs: { type: 'number', description: '可选信号；不传归由宿主 computeMs/maxWallMs 预算' },
     },

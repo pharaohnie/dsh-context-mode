@@ -71,10 +71,10 @@ user-invocable: true
 | 场景 | 语言 | 理由 |
 |---|---|---|
 | HTTP/API 调用、JSON | `ts`/`js` | 原生 fetch、JSON.parse、async/await |
-| 数据分析、CSV、统计 | `ts`/`js` | 原生 JSON/数组方法；shell 需先开 `executeAllowShell` |
-| 管道命令（grep/awk/jq） | `shell` | 需先开 `executeAllowShell`（默认关） |
+| 数据分析、CSV、统计 | `ts`/`js` | 原生 JSON/数组方法 |
+| 管道命令（grep/awk/jq） | `shell` | 默认开启 `executeAllowShell`（关闭时改用 ts 或 ctx_fetch_and_index） |
 
-> 注：`ctx_execute` 的 shell 路由**默认关闭**（`executeAllowShell=false`）。要跑 shell 需先确认配置已开启，否则用 `ts` 或 `ctx_fetch_and_index`。
+> 注：`ctx_execute` 的 shell 路由**默认开启**（`executeAllowShell=true`）。当该开关被显式设为 false 时，shell 代码会被拒绝，此时改用 `ts` 或 `ctx_fetch_and_index`。
 
 ## 搜索策略（ctx_search）
 

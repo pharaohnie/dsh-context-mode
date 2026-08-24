@@ -194,9 +194,9 @@ export function registerGate(ctx: {
           ? args.language.toLowerCase()
           : (name === 'ctx_execute_file' ? 'ts' : deps.config.executeDefaultLanguage) // R3-5（B-08c）：file 工具实际回退 'ts'
         const isShell = lang === 'shell' || lang === 'bash'
-        // shell 路由默认拒绝（executeAllowShell=false），引导到 ts 或 ctx_fetch_and_index
+        // shell 路由：当 executeAllowShell=false 时拒绝，引导到 ts 或 ctx_fetch_and_index
         if (isShell && !deps.config.executeAllowShell) {
-          const reason = `context-mode: ctx_* 的 shell 路由默认关闭（executeAllowShell=false）。请改用 ① ctx_execute(language:"ts", code) 只算并只打印答案；② 抓网页用 ctx_fetch_and_index；③ 过滤/统计用 ctx_batch_execute。`
+          const reason = `context-mode: ctx_* 的 shell 路由已被当前配置关闭（executeAllowShell=false）。要打开 shell 路由：① 在 cordis.patch.yml 的 insert 行加 config.executeAllowShell: true（要重启 dsh 才生效）；② 或设环境变量 — 但本键暂无 CONTEXT_MODE_* env 覆盖，需走配置层。请改用 ① ctx_execute(language:"ts", code) 只算并只打印答案；② 抓网页用 ctx_fetch_and_index；③ 过滤/统计用 ctx_batch_execute。`
           reject(reason)
           return { kind: 'deny', reason }
         }

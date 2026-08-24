@@ -48,7 +48,7 @@ export function buildSkillBody(threshold = 51200): string {
 ## Do NOT
 - \`curl\` / \`wget\` / \`inline-fetch\` → 用 \`ctx_fetch_and_index\`。
 - 一次整读 > ${threshold} 字节 → 用 \`ctx_index\`+\`ctx_search\`，或 \`read\` 带**有界** offset/limit（limit ≤ ${threshold}）。
-- \`ctx_* 的 shell 路由默认关闭 → 用 js/ts，或 \`ctx_fetch_and_index\`。
+- \`ctx_* 的 shell 路由已被显式关闭 → 用 js/ts，或 \`ctx_fetch_and_index\`。
 
 ## 自我调控
 若本会话已 read 了很多文件（或连读同一目录多个文件），说明在广度通读 → 改用 \`ctx_index(该目录)\` 一次入库 + 多次定向 \`ctx_search\`。

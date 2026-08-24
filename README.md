@@ -163,7 +163,7 @@ dsh restart
 - **read 整读门禁**：文件超过 51200 字节（约 50KB）、且不带**有界** `offset/limit`（limit ≤ 阈值）的整读，拒绝并给出引导。信任文档（README / CHANGELOG / LICENSE / AGENTS / package.json，去扩展名匹配）可整读，上限放宽到阈值 × 2。
 - **长 bash 软引导**：命令超过 1000 字节时，有审批通道就 ask，没有就放行。软引导绝不误拦合法命令。
 - **结构白名单**：pwd / echo / ls / wc / whoami / date 这类无害单命令，零摩擦放行。
-- **ctx_execute\* 的 shell 路由默认关**，引导用 ts/js 或 `ctx_fetch_and_index`。
+- **ctx_execute\* 的 shell 路由默认开**（`executeAllowShell=true`），被显式关闭时，引导用 ts/js 或 `ctx_fetch_and_index`。
 
 deny 的 reason 直接告诉模型下一步该用什么，不是干巴巴一句"拒绝"。
 
@@ -201,7 +201,7 @@ Schemastery schema 定义，默认知识库在 `~/.context-mode/content`。大�
 
 - `routingEnabled: true`，总开关
 - `maxReadBytesBeforeAsk: 51200`，read 整读阈值（`maxReadDenyBytes` 是语义对齐的新键，优先于旧名）
-- `executeAllowShell: false`，shell 路由默认关
+- `executeAllowShell: true`，shell 路由默认开
 - `memoryCapture: false`，记忆捕获默认关
 - `securityEnabled: false`，安全基线默认关，且当前只作用于 read 的 file_path
 - `subagentGuidance: false`，子代理守卫默认关

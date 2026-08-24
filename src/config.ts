@@ -25,10 +25,10 @@ export const Config = z.object({
   trustedReadBasenames: z.array(z.string()).default(['README', 'CHANGELOG', 'LICENSE', 'AGENTS', 'package.json']),
   // 【新增】信任文档可放宽到 maxReadBytesBeforeAsk × N。R5-7（S-L4）：默认 4→2 收紧豁免放大。
   trustedDocHeadroom: z.number().default(2),
-  // P0 沙箱执行（复用 DSH codeRuntime；executeAllowShell 默认关；并发 1-8）
+  // P0 沙箱执行（复用 DSH codeRuntime；executeAllowShell 默认开；并发 1-8）
   executeEnabled: z.boolean().default(true),
   executeDefaultLanguage: z.string().default('ts'),
-  executeAllowShell: z.boolean().default(false),
+  executeAllowShell: z.boolean().default(true),
   executeTimeoutMs: z.number().default(0),
   executeConcurrency: z.number().default(4),
   // R3-3（D-H2/B-06）：ctx_execute_file / ctx_index 单文件内容上限（防整读大文件进内存/worker 重编译）
