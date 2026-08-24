@@ -3,9 +3,7 @@
 // 注意：ToolGuard = (execution) => string | undefined，是同步签名（guardReason 不 await，见 dsh-tools）。
 // 因此 read 整读门禁（需 async stat）只能在 pre-execute 的 gate.ts 里做，本文件不拦 read（保持同步、避免误拒）。
 import { floodReason } from './gate.ts'
-import { floodCommandWord } from '../util/shell-tokenize.ts'
-
-const FLOOD_WORDS = ['curl', 'wget', 'inline-fetch']
+import { floodCommandWord, FLOOD_WORDS } from '../util/shell-tokenize.ts' // R5-5（S-L1）：洪水词单源（shell-tokenize）
 
 export interface GuardDeps {
   config: { routingEnabled: boolean; denyCurlWget: boolean; executeEnabled: boolean; executeAllowShell: boolean }

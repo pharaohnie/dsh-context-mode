@@ -13,8 +13,9 @@ export const Config = z.object({
   denyCurlWget: z.boolean().default(true),
   // 无界 bash 首命令词+字节阈值；0 = 不触发（早期默认关闭）。P1 软引导：>0 且超阈值时，对长 bash 给「改用 ctx_*」的软提示（有审批 ask、无审批放行）。
   bashNudgeMinCommandBytes: z.number().default(1000),
+  // R2-4（D-H1）：语义对齐键——旧名 maxReadBytesBeforeAsk（实为 deny 阈值）保留为 deprecated 兼容键，新键优先。
+  maxReadDenyBytes: z.number(),
   // 整读引导（deny）阈值：stat.size > 该值才触发 deny+引导。对齐 read 工具自身 readMaxBytes（≈50KB=51200）。
-  // 注：字段名带 ask 但实为 deny 阈值——语义别名见下方 readFloodDenyBytes 注释；maxReadBytesBeforeAsk 保留为兼容键。
   maxReadBytesBeforeAsk: z.number().default(51200),
   // 【新增】read「自动引导到检索」规则独立开关；关 = 回到现状（read 从不门禁）。首版只保留这一个总开关，不引入 readRoutingMode。
   autoGuideRead: z.boolean().default(true),
@@ -22,14 +23,16 @@ export const Config = z.object({
   readAllowBounded: z.boolean().default(true),
   // 【新增】信任文档 basename 白名单（basename 命中 + size≤headroom 双条件豁免）。
   trustedReadBasenames: z.array(z.string()).default(['README', 'CHANGELOG', 'LICENSE', 'AGENTS', 'package.json']),
-  // 【新增】信任文档可放宽到 maxReadBytesBeforeAsk × N。
-  trustedDocHeadroom: z.number().default(4),
+  // 【新增】信任文档可放宽到 maxReadBytesBeforeAsk × N。R5-7（S-L4）：默认 4→2 收紧豁免放大。
+  trustedDocHeadroom: z.number().default(2),
   // P0 沙箱执行（复用 DSH codeRuntime；executeAllowShell 默认关；并发 1-8）
   executeEnabled: z.boolean().default(true),
   executeDefaultLanguage: z.string().default('ts'),
   executeAllowShell: z.boolean().default(false),
   executeTimeoutMs: z.number().default(0),
   executeConcurrency: z.number().default(4),
+  // R3-3（D-H2/B-06）：ctx_execute_file / ctx_index 单文件内容上限（防整读大文件进内存/worker 重编译）
+  maxSourceBytes: z.number().default(2_000_000),
   // A 知识库
   knowledgeBaseDir: z.string().default(defaultKnowledgeDir),
   knowledgeBaseTtlMs: z.number().default(86_400_000),
@@ -45,8 +48,10 @@ export const Config = z.object({
   // P2c 可选记账明细表
   accountingLedger: z.boolean().default(false),
   // 【新增】结构性有界白名单（P1-2）：无害单命令（白名单 + 无控制运算符）→ 零摩擦放行，不碰长命令 ask。
-  boundedWhitelist: z.array(z.string()).default(['pwd', 'git', 'echo', 'ls', 'cat', 'wc', 'whoami', 'date']),
-  // 【新增】默认安全基线（P0-2，默认关，避免强开打扰）：开启后按 allow/deny glob 对路径/命令做 fail-closed 判定。
+  // R1-3（S-H3）：移除 cat/git——cat 是整读等价物（会绕过 read 门禁），git 大输出子命令（log/diff）可成输出洪水。
+  boundedWhitelist: z.array(z.string()).default(['pwd', 'echo', 'ls', 'wc', 'whoami', 'date']),
+  // 【新增】默认安全基线（P0-2，默认关，避免强开打扰）。R5-8（D-M2）诚实标注：当前仅作用于 read 工具的 file_path，
+  // 不覆盖 bash / ctx_index / ctx_execute_file 的目标路径；开启后按 allow/deny glob 对 read 做判定。
   securityEnabled: z.boolean().default(false),
   securityAllowGlobs: z.array(z.string()).default([]),
   securityDenyGlobs: z.array(z.string()).default([]),
@@ -66,6 +71,7 @@ export interface ContextModeConfig {
   denyCurlWget: boolean
   bashNudgeMinCommandBytes: number
   maxReadBytesBeforeAsk: number
+  maxReadDenyBytes?: number
   autoGuideRead: boolean
   readAllowBounded: boolean
   trustedReadBasenames: string[]
@@ -75,6 +81,7 @@ export interface ContextModeConfig {
   executeAllowShell: boolean
   executeTimeoutMs: number
   executeConcurrency: number
+  maxSourceBytes?: number
   knowledgeBaseDir: string
   knowledgeBaseTtlMs: number
   knowledgeBaseConcurrency: number

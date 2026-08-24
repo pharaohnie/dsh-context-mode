@@ -5,7 +5,8 @@ const OP_SPLIT = /[\n;|&]+/ // 命令分隔符（分段，逐段识别）
 const PREFIXES = ['sudo', 'env', 'command', 'nohup', 'time', 'exec'] // 透明前缀
 const SHELLS = ['bash', 'sh', 'zsh', 'dash', 'ksh']
 const VALUE_OPTS = new Set(['-u', '-g', '-h', '-p', '-C', '-D', '-R', '-c', '-o', '-n', '-l', '-r', '-w', '-P', '-S', '-H']) // 带值选项
-export const FLOOD_WORDS = ['curl', 'wget', 'inline-fetch']
+// R5-5（S-L1）：洪水工具词表（gate/guard 均从此单源导入）。扩展覆盖明确网络拉取工具；python3/node 未纳入（误伤合法数据处理，见 FIX-PLAN R5-5）。
+export const FLOOD_WORDS = ['curl', 'wget', 'inline-fetch', 'aria2c', 'nc', 'ncat']
 
 const REDIRECT = /^(?:[0-9]+)?(?:>>|>&|<<|<&|&>>|&>|>|<)$/ // 单 token 重定向运算符
 const REDIRECT_ATTACHED = /^(?:[0-9]+)?(?:>>|>&|<<|<&|&>>|&>|>|<)(?:"[^"]*"|'[^']*'|\S+)$/ // 运算符+目标紧贴（如 2>/dev/null）

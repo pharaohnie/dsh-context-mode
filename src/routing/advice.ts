@@ -15,7 +15,7 @@ export interface AdviceDeps {
   executeDefaultLanguage: string
 }
 
-function buildStructured(deps: AdviceDeps): () => string {
+export function buildStructured(deps: AdviceDeps): () => string {
   const threshold = deps.maxReadBytesBeforeAsk
   const thresholdTokens = Math.round(threshold / 4)
   const budget = deps.budgetBytes
@@ -29,6 +29,18 @@ function buildStructured(deps: AdviceDeps): () => string {
 - **看懂少量小文件**（单个 ≤ ${threshold} 字节、且你要理解其语义/精确内容，如读几行配置、看一个源码文件）→ **read 合理**。
 - **大文件 / 整个目录 / 大量数据 / 需提取统计汇总** → 用 **ctx_***（ctx_index + ctx_search / ctx_execute_file / ctx_execute）。
 - **自我调控**：若本会话你已 read 了**很多文件**（或连续读同一目录多个文件），说明你很在广度通读——改为 **ctx_index(该目录) 一次入库 + 多次定向 ctx_search**，别逐个 read 通读。
+
+## 工具选择层级（tool_selection_hierarchy）
+0. **MEMORY** 恢复/压缩后：ctx_search(sort:"timeline", source:["memory:"]) 先查既往决策/约束/用户要求，再向用户提问（勿重复已决定事项）
+1. **GATHER** 并行收集：ctx_batch_execute(commands, queries)（跑命令 + 自动入库 + 同轮检索，一次往返）
+2. **FOLLOW-UP** 追问：ctx_search(queries:["q1","q2"]) 相关问题一次批量问清（勿多次单查）
+3. **PROCESSING** 加工：ctx_execute(language, code) | ctx_execute_file(path, code) 只 console.log 答案
+
+## ctx_commands（用户触发词 → 工具）
+- "ctx stats" / 问节约统计 → 调 ctx_stats，原样展示
+- "ctx doctor" / 自检 → 调 ctx_doctor
+- "ctx purge" / 清空知识库 → 调 ctx_purge（不可逆，先向用户确认）
+- 压缩/恢复后：知识库保留，无需重建；要全新开始才 ctx_purge
 
 ## 白名单（原生工具的合法场景）
 - 文件写/状态变更：Write / Edit / git add|commit|push / mkdir / mv / cp / rm / cd / pwd / kill / npm install / echo
@@ -51,7 +63,7 @@ analyze logs · summarize output · process data · parse JSON · filter results
 
 ## Do NOT attempt (host-denied)
 - curl / wget / inline-fetch → 用 ctx_fetch_and_index
-- read > ${threshold} 字节(≈${thresholdTokens} tokens) whole → denied；用 ctx_index+ctx_search，或 read 带 offset/limit
+- read > ${threshold} 字节(≈${thresholdTokens} tokens) whole → denied；用 ctx_index+ctx_search，或 read 带**有界** offset/limit（limit ≤ ${threshold}）
 - ctx_* 的 shell 路由默认关闭 → 用 js/ts，或 ctx_fetch_and_index
 
 ## ctx_execute vs run_code
@@ -64,9 +76,6 @@ ctx_execute = context-mode 受引导的 codeRuntime 封装（带记账/批量/�
 ## File writing policy
 写文件用原生 Write/Edit；ctx_execute 是资源隔离（空环境/heap cap/硬中断）非数据沙箱，信任姿态与 bash 同级，**不承诺**程序无法读/写宿主文件。
 
-## Memory continuity
-On resume: ctx_search(sort:"timeline", source:["memory:decision","memory:constraint","memory:user-prompt","memory:rejected-approach"]) 再向用户提问。
-
 ## 检索预算
 ctx_search 默认 budget ${budget} 字节，只回命中片段；先索引再检索，重复索引重复计入。
 
@@ -74,14 +83,16 @@ ctx_search 默认 budget ${budget} 字节，只回命中片段；先索引再检
 ${trusted} 可全量读，无需先索引（仍设上限防极端大文档）。`
 }
 
-function buildLean(deps: AdviceDeps): () => string {
+export function buildLean(deps: AdviceDeps): () => string {
   const threshold = deps.maxReadBytesBeforeAsk
   return () => `Context-mode (MANDATORY): 看懂少量小文件（≤${threshold} 字节且要理解语义）→ read 合理；大文件/整目录/大量数据/提取统计 → ctx_*（ctx_index+ctx_search / ctx_execute_file / ctx_execute）。
 - 读文件做分析/摘要/统计 → ctx_execute_file；整目录/多文件 → ctx_index(目录)+ctx_search；跑命令/调 API 要处理 → ctx_execute；并行+检索 → ctx_batch_execute；抓网页 → ctx_fetch_and_index。
 - 本会话已 Read 了很多文件 → 改用 ctx_index(目录)+ctx_search。
-- 大文件 > ${threshold} 字节：先 ctx_index 再 ctx_search；确需分段用 read 带 offset/limit。
+- 大文件 > ${threshold} 字节：先 ctx_index 再 ctx_search；确需分段用 read 带**有界** offset/limit（limit ≤ ${threshold}）。
 - 计算/分析用 ctx_execute(language:"ts", code) 只 console.log 答案；批量用 ctx_batch_execute。
-- 抓网页用 ctx_fetch_and_index（不要 curl/wget）。`
+- 抓网页用 ctx_fetch_and_index（不要 curl/wget）。
+- 层级：0 记忆恢复(先 ctx_search timeline memory:) → 1 并行收集(ctx_batch_execute) → 2 追问(ctx_search queries 批量) → 3 加工(ctx_execute/ctx_execute_file)。
+- "ctx stats" / "ctx doctor" / "ctx purge" → 调对应工具。`
 }
 
 export function registerAdvice(ctx: { systemPrompt: { section(s: unknown): unknown } }, deps: AdviceDeps) {

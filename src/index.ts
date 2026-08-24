@@ -6,6 +6,7 @@ import { registerKnowledgeTools, SEARCH_BUDGET_BYTES } from './knowledge/tools.t
 import { registerExecuteTools } from './knowledge/execute.ts'
 import { registerMemory, captureMemory } from './knowledge/memory.ts'
 import { openKnowledgeDb, incMeta, computeSavedBytes, type KnowledgeDb } from './knowledge/sqlite.ts'
+import { createFloodGuard } from './knowledge/flood-guard.ts'
 import { registerGate } from './routing/gate.ts'
 import { registerGuard } from './routing/guard.ts'
 import { registerAdvice } from './routing/advice.ts'
@@ -31,7 +32,10 @@ export function apply(ctx: {
   // 防御：loader 可能未对 config 应用 schema 默认，用显式 DEFAULT_CONFIG 兜底合并。
   // P3-1：env 覆盖插在 DEFAULT_CONFIG 与 rawConfig 之间（优先级 rawConfig > env > 默认）。
   const config: ContextModeConfig = { ...DEFAULT_CONFIG, ...envConfigOverrides(), ...rawConfig }
-  console.log('[context-mode] apply 收到 config =', JSON.stringify(config))
+  // R2-4（D-H1）：maxReadDenyBytes（语义对齐新键）优先；旧 maxReadBytesBeforeAsk 保留为 deprecated 兼容键。
+  if (config.maxReadDenyBytes !== undefined) config.maxReadBytesBeforeAsk = config.maxReadDenyBytes
+  // R5-3（D-L4）：只打印摘要（enabled flags + db 路径），不整包刷配置（避免策略/路径泄露与日志噪音）
+  console.log(`[context-mode] apply: routing=${config.routingEnabled} execute=${config.executeEnabled} shell=${config.executeAllowShell} memory=${config.memoryCapture} continuity=${config.sessionContinuity} kdb=${config.knowledgeBaseDir}`)
   // 打开知识库（失败则降级：ctx_doctor 报告 + 知识库工具报错）
   let kdb: KnowledgeDb | null = null
   try {
@@ -41,6 +45,8 @@ export function apply(ctx: {
     console.log('[context-mode] 知识库打开失败:', (e as Error).message)
     kdb = null
   }
+  // P1：搜索 FloodGuard 单例（per-agent-context 分桶）——同时供 ctx_search 节流与 ctx_doctor 观测
+  const floodGuard = createFloodGuard(config.searchWindowMs, config.searchMaxResultsAfter, config.searchBlockAfter)
   const deps: DoctorDeps = {
     tools: ctx.tools,
     systemPrompt: ctx.systemPrompt,
@@ -54,10 +60,11 @@ export function apply(ctx: {
     fs: ctx.get('fs'),
     shell: ctx.get('shell'),
     sandboxPolicy: ctx.get('sandboxPolicy'),
+    floodGuard,
   }
   registerDoctor(ctx, deps)
   // M1：知识库四工具
-  registerKnowledgeTools(ctx, { kdb, config: { knowledgeBaseTtlMs: config.knowledgeBaseTtlMs, knowledgeBaseConcurrency: config.knowledgeBaseConcurrency, searchWindowMs: config.searchWindowMs, searchMaxResultsAfter: config.searchMaxResultsAfter, searchBlockAfter: config.searchBlockAfter } })
+  registerKnowledgeTools(ctx, { kdb, config: { knowledgeBaseTtlMs: config.knowledgeBaseTtlMs, knowledgeBaseConcurrency: config.knowledgeBaseConcurrency, searchWindowMs: config.searchWindowMs, searchMaxResultsAfter: config.searchMaxResultsAfter, searchBlockAfter: config.searchBlockAfter, maxSourceBytes: config.maxSourceBytes }, floodGuard })
   // P0：沙箱执行三工具（复用 DSH codeRuntime；把 config 里的 execute* 传过去）
   registerExecuteTools(ctx, { kdb, config })
   // M2：路由强制（host 全局注册；fail-open 用 ctx.get('approval') 探测）
@@ -134,7 +141,7 @@ export function apply(ctx: {
     executeDefaultLanguage: config.executeDefaultLanguage,
   })
   // P1-1：注册可软触发的 context-mode skill（DSH skills 可选；缺失降级到 advice 常驻 section）
-  registerSkill(ctx, { enabled: config.routingEnabled })
+  registerSkill(ctx, { enabled: config.routingEnabled, config }) // R4-2：传阈值供 SKILL 文本参数化
   // M3：会话连续性恢复（session-start 监听 + sessionQuery 检索 + agent.inject 注入）
   registerRestore(ctx, {
     config: {
@@ -145,6 +152,7 @@ export function apply(ctx: {
       memoryResumeTopN: config.memoryResumeTopN,
       memoryResumeBytes: config.memoryResumeBytes,
       subagentGuidance: config.subagentGuidance,
+      maxReadBytesBeforeAsk: config.maxReadBytesBeforeAsk, // R4-2：子代理守卫阈值参数化
     },
     kdb,
   })

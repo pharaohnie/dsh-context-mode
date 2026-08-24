@@ -20,6 +20,7 @@
   "files": [
     "dist",
     "src",
+    "skills",
     "cordis.patch.yml",
     "relink-dsh-context-mode.sh",
     "README.md"

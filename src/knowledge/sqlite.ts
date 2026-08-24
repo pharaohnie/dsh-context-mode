@@ -4,6 +4,7 @@
 import { DatabaseSync } from 'node:sqlite'
 import fs from 'node:fs'
 import path from 'node:path'
+import { byteLen } from '../util/bytes.ts'
 
 // P3-2：RRF 合并常数（检索排名的 k=60，业界常见），定位为内部算法常量、非部署差异点。
 const RRF_K = 60
@@ -33,19 +34,29 @@ export interface KnowledgeDb { db: DatabaseSync; file: string }
 
 /** 打开（必要时创建）知识库；目录可配，默认 ~/.context-mode/content。 */
 export function openKnowledgeDb(dir: string): KnowledgeDb {
-  fs.mkdirSync(dir, { recursive: true })
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 }) // R5-4（S-M3）：目录权限收紧
   const file = path.join(dir, 'content.db')
   const db = new DatabaseSync(file)
+  // R3-1（B-08e）：并发写防护——WAL + busy_timeout（多进程共享 content.db 时防 database is locked）
+  db.exec('PRAGMA journal_mode = WAL;')
+  db.exec('PRAGMA busy_timeout = 5000;')
   createSchema(db)
   return { db, file }
 }
 
-/** 写入一个 chunk（chunks + 两个 FTS 表同步）。 */
+/** 写入一个 chunk（chunks + 两个 FTS 表同步）。R4-3（B-02）：三表写入包事务，中途失败回滚不留孤儿 chunk。 */
 export function addChunk(db: DatabaseSync, ref: string, title: string, body: string, ttlMs: number, now = Date.now()) {
-  const id = Number(db.prepare('INSERT INTO chunks(ref,title,body,created_at,ttl_ms) VALUES(?,?,?,?,?)').run(ref, title, body, now, ttlMs).lastInsertRowid)
-  db.prepare('INSERT INTO chunks_porter(rowid,title,body) VALUES(?,?,?)').run(id, title, body)
-  db.prepare('INSERT INTO chunks_trigram(rowid,title,body) VALUES(?,?,?)').run(id, title, body)
-  return id
+  db.exec('BEGIN')
+  try {
+    const id = Number(db.prepare('INSERT INTO chunks(ref,title,body,created_at,ttl_ms) VALUES(?,?,?,?,?)').run(ref, title, body, now, ttlMs).lastInsertRowid)
+    db.prepare('INSERT INTO chunks_porter(rowid,title,body) VALUES(?,?,?)').run(id, title, body)
+    db.prepare('INSERT INTO chunks_trigram(rowid,title,body) VALUES(?,?,?)').run(id, title, body)
+    db.exec('COMMIT')
+    return id
+  } catch (e) {
+    db.exec('ROLLBACK')
+    throw e
+  }
 }
 
 /** 清空所有 chunk（含 FTS 同步）。 */
@@ -92,6 +103,24 @@ export function getMeta(db: DatabaseSync, key: string): number {
   return row ? Number(row.value) : 0
 }
 
+/** R4-7（B-08d）：覆盖写 meta（非累加）。 */
+export function setMeta(db: DatabaseSync, key: string, value: number) {
+  db.prepare('INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, String(value))
+}
+
+/** R4-7（B-08d）：当前在库 chunk 的真实字节总量（与 chunkStats 同口径；覆盖写 indexed_bytes 用）。 */
+export function currentIndexedBytes(db: DatabaseSync): number {
+  const row = db.prepare('SELECT COALESCE(sum(length(CAST(body AS BLOB))), 0) AS bytes FROM chunks').get() as { bytes: number }
+  return row.bytes
+}
+
+/** P4：知识库分片统计（ctx_doctor 用）。expired 为惰性未清量（下次 deleteExpired 才删）。 */
+export function chunkStats(db: DatabaseSync, now = Date.now()): { total: number; live: number; expired: number; bytes: number } {
+  const row = db.prepare('SELECT count(*) AS total, COALESCE(sum(length(CAST(body AS BLOB))), 0) AS bytes FROM chunks').get() as { total: number; bytes: number }
+  const expiredRow = db.prepare('SELECT count(*) AS n FROM chunks WHERE created_at + ttl_ms <= ?').get(now) as { n: number }
+  return { total: row.total, live: row.total - expiredRow.n, expired: expiredRow.n, bytes: row.bytes }
+}
+
 /** 修正口径的节约台账（S7）：measured_saved 仅 read 侧检测口径（read_denied_bytes，唯一精确「本应进入上下文」）；
  *  entered = search_bytes + execute_log_bytes（实际进入/返还）；kept_out_pct_measured 只反映 read 侧，不代表全量节约。
  *  kept_out_pct_total 含 estimate/下界（indexed-search 粗差 + denied_bytes 命令串下界），与之并列展示。
@@ -107,6 +136,8 @@ export function computeSavedBytes(db: DatabaseSync): {
   rejected: number
   executeLog: number
   saved: number
+  savedMeasured: number
+  savedEstimate: number
   measuredSaved: number
   entered: number
   keptOutMeasured: number
@@ -120,12 +151,15 @@ export function computeSavedBytes(db: DatabaseSync): {
   const retrieval = getMeta(db, 'retrieval_bytes')
   const rejected = getMeta(db, 'rejected_bytes')
   const executeLog = getMeta(db, 'execute_log_bytes')
-  const saved = Math.max(0, indexed - search) + readDenied + cmdDenied
-  const measuredSaved = readDenied + redirect // read 侧精确 + 洪水改道（命令串下界）
+  // R5-1（D-H3）：口径收敛——savedMeasured 仅可证伪项（read 精确 + 命令串/改道下界）；savedEstimate 为粗差（indexed−search）与 rejected 下界，明确标注不入 measured。
+  const savedMeasured = readDenied + cmdDenied + redirect
+  const savedEstimate = Math.max(0, indexed - search) + rejected
+  const saved = savedMeasured + savedEstimate // 兼容字段（ctx_stats 默认只展示 measured）
+  const measuredSaved = savedMeasured
   const entered = search + executeLog
-  const keptOutMeasured = measuredSaved + entered > 0 ? (measuredSaved / (measuredSaved + entered)) * 100 : 0
+  const keptOutMeasured = savedMeasured + entered > 0 ? (savedMeasured / (savedMeasured + entered)) * 100 : 0
   const keptOutTotal = saved + entered > 0 ? (saved / (saved + entered)) * 100 : 0
-  return { indexed, search, readDenied, cmdDenied, redirect, retrieval, rejected, executeLog, saved, measuredSaved, entered, keptOutMeasured, keptOutTotal }
+  return { indexed, search, readDenied, cmdDenied, redirect, retrieval, rejected, executeLog, saved, savedMeasured, savedEstimate, measuredSaved, entered, keptOutMeasured, keptOutTotal }
 }
 
 /** 取体文本（M1 命中片段用）。 */
@@ -154,15 +188,24 @@ export function searchChunks(db: DatabaseSync, opts: SearchOptions): SearchHit[]
   const terms = opts.query.split(/\s+/).filter((t) => t.length > 0)
   const rank = (table: string): Map<number, number> => {
     const m = new Map<number, number>()
-    try {
+    const tryQuery = (q: string) => {
       const rows = db.prepare(
         `SELECT ${table}.rowid AS id, bm25(${table}, 5.0, 1.0) AS s
          FROM ${table} JOIN chunks c ON c.id = ${table}.rowid
          WHERE ${table} MATCH ? AND c.created_at + c.ttl_ms > ?
          ORDER BY s LIMIT 200`,
-      ).all(opts.query, now) as { id: number }[]
+      ).all(q, now) as { id: number }[]
       rows.forEach((r, i) => m.set(r.id, i))
-    } catch { /* MATCH 语法非法时整表不参与 RRF，不抛给模型 */ }
+    }
+    try {
+      tryQuery(opts.query)
+    } catch {
+      // R3-2（B-08g）：原 query 触发 FTS5 语法错误 → 逐词加引号转义重试，避免整表静默退出 RRF
+      try {
+        const escaped = opts.query.split(/\s+/).filter(Boolean).map((w) => `"${w.replace(/"/g, '""')}"`).join(' ')
+        if (escaped) tryQuery(escaped)
+      } catch { /* 仍失败：该表不参与 RRF（静默降级） */ }
+    }
     return m
   }
   const porter = rank('chunks_porter')
@@ -190,8 +233,10 @@ export function searchChunks(db: DatabaseSync, opts: SearchOptions): SearchHit[]
   for (const id of rowIds.slice(0, opts.topN)) {
     const c = chunkMap.get(id)!
     const snippet = `${c.title} — ${getSnippet(c.body, terms)}`
-    if (bytes + snippet.length > opts.budgetBytes) break
-    bytes += snippet.length
+    const bl = byteLen(snippet)
+    if (bl > opts.budgetBytes) continue // R4-5（B-04）：单条超预算跳过，避免首条超限断出空结果
+    if (bytes + bl > opts.budgetBytes) break
+    bytes += bl
     hits.push({ id: c.id, ref: c.ref, title: c.title, snippet, score: opts.sort === 'timeline' ? c.created_at : (merged.get(id) ?? 0) })
   }
   return hits

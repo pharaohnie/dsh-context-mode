@@ -2,6 +2,7 @@
 // 记忆类别 → ref 前缀：memory:user-prompt:<sid> / memory:decision:<sid> / memory:constraint:<sid> / memory:rejected-approach:<sid>
 // B3：记忆捕获默认 opt-in（memoryCapture:false）；TTL 默认非 0（7d）控制生命周期；调用方须过滤插件合成消息 + subagent 会话。
 import { addChunk, deleteByRef, deleteExpired, incMeta, type KnowledgeDb } from './sqlite.ts'
+import { byteLen } from '../util/bytes.ts'
 
 export const MEMORY_KINDS = ['user-prompt', 'decision', 'constraint', 'rejected-approach'] as const
 export type MemoryKind = (typeof MEMORY_KINDS)[number]
@@ -24,7 +25,7 @@ export function captureMemory(kbd: KnowledgeDb | null, kind: MemoryKind, sid: st
   const ref = `memory:${kind}:${sid}`
   // 去重：user-prompt 按 ref 替换（只留最近一条）；其它按 seen-set（防相同内容重复入账）
   if (kind === 'user-prompt') {
-    try { deleteByRef(d, ref) } catch { /* 忽略 */ }
+    try { deleteByRef(d, ref) } catch (e) { console.warn('[context-mode] memory 清理失败:', (e as Error).message) } // R5-2（B-08f）
   } else {
     const key = `${kind}:${sid}:${hash(text)}`
     if (seen.has(key)) return
@@ -34,8 +35,8 @@ export function captureMemory(kbd: KnowledgeDb | null, kind: MemoryKind, sid: st
   try {
     addChunk(d, ref, kind, text, ttlMs)
     incMeta(d, 'memory_chunks', 1)
-    incMeta(d, 'memory_bytes', text.length)
-  } catch { /* 写入失败不阻塞 */ }
+    incMeta(d, 'memory_bytes', byteLen(text))
+  } catch (e) { console.warn('[context-mode] memory 写入失败:', (e as Error).message) } // R5-2（B-08f）
 }
 
 const RESUME_PREFIXES = ['memory:decision', 'memory:constraint', 'memory:user-prompt', 'memory:rejected-approach']
@@ -109,6 +110,8 @@ export function registerMemory(ctx: { on(event: string, listener: (...a: never[]
       const last = evs[evs.length - 1]
       const text = typeof last.text === 'string' ? last.text : ''
       if (!text) return
+      // R5-9（D-M4）降级标注：关键词启发式识别「决策/约束」，非精确语义判定——误判/漏判已知（技术对话中「方案/限制/不再」高频）；
+      // 已在 doctor/README 如实标注为启发式；如需精确决策识别建议改为显式结构化 schema。
       if (/(决定|决策|记住|约束|需要保留|不再|方案|限制)/.test(text)) {
         const kind = /(约束|限制|不再|需要保留)/.test(text) ? 'constraint' : 'decision'
         captureMemory(deps.kdb, kind, sid, text.slice(0, 600), deps.config.memoryCapture, deps.config.memoryTtlMs)

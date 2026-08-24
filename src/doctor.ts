@@ -1,7 +1,10 @@
 // doctor.ts — ctx_doctor：诊断 context-mode 依赖的所有 seam 装配与知识库健康
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { DatabaseSync } from 'node:sqlite'
-import { createSchema, smokeFts5, type KnowledgeDb } from './knowledge/sqlite.ts'
+import { createSchema, smokeFts5, chunkStats, type KnowledgeDb } from './knowledge/sqlite.ts'
+import { envConfigOverrides } from './config.ts'
+import { type FloodGuard } from './knowledge/flood-guard.ts'
+import { SEARCH_BUDGET_BYTES } from './knowledge/tools.ts'
 
 export interface DoctorDeps {
   tools: unknown
@@ -16,6 +19,8 @@ export interface DoctorDeps {
   fs?: unknown
   shell?: unknown
   sandboxPolicy?: unknown
+  /** P1：搜索 FloodGuard 运行态（per-agent-context 分桶）观测。 */
+  floodGuard?: FloodGuard
 }
 
 export function registerDoctor(ctx: { tools: { register(def: unknown): unknown }; get(name: string): unknown }, deps: DoctorDeps) {
@@ -91,7 +96,7 @@ export function registerDoctor(ctx: { tools: { register(def: unknown): unknown }
       // P0-2 安全基线 + P1-2 白名单 + P2-1 搜索节流 + P2-3 子代理守卫 armed 状态（对齐官方 ctx_doctor 诊断）
       if (deps.config) {
         report('安全基线（securityEnabled）', deps.config.securityEnabled === true,
-          deps.config.securityEnabled === true ? `已启用：allow=${deps.config.securityAllowGlobs?.length ?? 0} 条，deny=${deps.config.securityDenyGlobs?.length ?? 0} 条` : '默认关闭（P0-2，避免强开打扰）')
+          deps.config.securityEnabled === true ? `已启用：allow=${deps.config.securityAllowGlobs?.length ?? 0} 条，deny=${deps.config.securityDenyGlobs?.length ?? 0} 条（R5-8 诚实标注：当前仅作用于 read 的 file_path，不覆盖 bash/ctx_index/ctx_execute_file 目标路径）` : '默认关闭（P0-2，避免强开打扰）')
         report('结构白名单（boundedWhitelist）', Array.isArray(deps.config.boundedWhitelist) && deps.config.boundedWhitelist.length > 0,
           `已启用：${deps.config.boundedWhitelist?.length ?? 0} 个无害命令零摩擦放行`)
         report('搜索 FloodGuard（searchBlockAfter）', (deps.config.searchBlockAfter ?? 0) > 0,
@@ -99,9 +104,47 @@ export function registerDoctor(ctx: { tools: { register(def: unknown): unknown }
         report('子代理守卫（subagentGuidance）', deps.config.subagentGuidance === true,
           deps.config.subagentGuidance === true ? '已启用：给子代理注入 context_window_protection' : '默认关闭（P2-3）')
       }
+      // P4：实际生效的 env 覆盖（实时读取；展示 env 覆盖了哪些键，让调参透明）
+      try {
+        const envOver = envConfigOverrides()
+        const keys = Object.keys(envOver)
+        if (keys.length) {
+          const detail = keys.map((k) => `${k}=${JSON.stringify((envOver as Record<string, unknown>)[k])}`).join(', ')
+          report('env 覆盖（CONTEXT_MODE_*）', true, detail)
+        } else {
+          report('env 覆盖（CONTEXT_MODE_*）', true, '无（默认 + bundle/rawConfig）')
+        }
+      } catch (e) {
+        report('env 覆盖（CONTEXT_MODE_*）', false, String((e as Error).message))
+      }
+      // P4：FloodGuard 运行态（per-agent-context 分桶；sessionId 截断展示，不泄全文）
+      if (deps.floodGuard) {
+        try {
+          const snap = deps.floodGuard.snapshot()
+          if (snap.disabled) {
+            report('FloodGuard 运行态', false, '已禁用（windowMs<=0 或 blockAfter<=0）')
+          } else {
+            const top = snap.buckets.slice(0, 3).map((b) => `${b.key.slice(0, 8)}:${b.count}`).join(' ')
+            report('FloodGuard 运行态', !snap.disabled,
+              `活跃桶 ${snap.buckets.length}/${snap.maxKeys}${top ? '（top: ' + top + '）' : ''}`)
+          }
+        } catch (e) {
+          report('FloodGuard 运行态', false, String((e as Error).message))
+        }
+      } else {
+        report('FloodGuard 运行态', false, '未注入（registerDoctor 未传 floodGuard）')
+      }
       // 知识库：真实路径可写 + schema 建表；FTS5 冒烟在内存库跑（避免污染真实数据）
       if (deps.kdb) {
         report('知识库建表', true, deps.kdb.file)
+        // P4：分片统计（live/expired 惰性量，下次检索才清）
+        try {
+          const cs = chunkStats(deps.kdb.db)
+          report('知识库分片', cs.live > 0 || cs.expired > 0,
+            `live ${cs.live} / expired ${cs.expired} / total ${cs.total}（${cs.bytes} 字节；检索预算 ${SEARCH_BUDGET_BYTES}/次）`)
+        } catch (e) {
+          report('知识库分片', false, String((e as Error).message))
+        }
       } else {
         report('知识库', false, '目录不可写/打开失败')
       }

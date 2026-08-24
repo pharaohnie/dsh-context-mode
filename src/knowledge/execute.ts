@@ -7,6 +7,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { addChunk, deleteByRef, incMeta, searchChunks } from './sqlite.ts'
 import { concurrencyPool } from './web.ts'
 import { SEARCH_BUDGET_BYTES } from './tools.ts'
+import { byteLen } from '../util/bytes.ts'
 
 export interface ExecuteDeps {
   config: {
@@ -16,6 +17,7 @@ export interface ExecuteDeps {
     executeTimeoutMs: number
     executeConcurrency: number
     knowledgeBaseTtlMs: number
+    maxSourceBytes?: number
   }
   kdb: { db: any } | null
 }
@@ -27,7 +29,7 @@ const textSchema = {
     text: { type: 'string', required: true },
     count: { type: 'number', required: true },
   },
-}
+} as const
 
 function serializeValue(v: unknown): string {
   try { return JSON.stringify(v) } catch { return String(v) }
@@ -72,7 +74,7 @@ export function registerExecuteTools(ctx: { tools: { register(def: unknown): unk
   }
   const countRun = (d: any, text: string) => {
     incMeta(d, 'execute_runs', 1)
-    incMeta(d, 'execute_log_bytes', text.length)
+    incMeta(d, 'execute_log_bytes', byteLen(text))
   }
 
   ctx.tools.register(defineTool({
@@ -84,7 +86,7 @@ export function registerExecuteTools(ctx: { tools: { register(def: unknown): unk
       timeoutMs: { type: 'number', description: '可选信号；不传归由宿主 computeMs/maxWallMs 预算' },
     },
     output: { schema: textSchema, render: (_args: unknown, v: { text: string }) => [{ type: 'text', text: v.text }] as any },
-    async execute(args: { language?: string; code: string; timeoutMs?: number }, exec: any) {
+    async execute(args: { language?: 'ts' | 'typescript' | 'js' | 'shell' | 'bash'; code: string; timeoutMs?: number }, exec: any) {
       if (!config.executeEnabled) throw new Error('context-mode: ctx_execute 未启用（executeEnabled=false）')
       const d = requireDb()
       const res = await runSandbox(ctx, args.code, args.language ?? config.executeDefaultLanguage, { signal: exec?.signal, timeoutMs: args.timeoutMs })
@@ -103,7 +105,7 @@ export function registerExecuteTools(ctx: { tools: { register(def: unknown): unk
       timeoutMs: { type: 'number' },
     },
     output: { schema: textSchema, render: (_args: unknown, v: { text: string }) => [{ type: 'text', text: v.text }] as any },
-    async execute(args: { path: string; language?: string; code?: string; timeoutMs?: number }, exec: any) {
+    async execute(args: { path: string; language?: 'ts' | 'typescript' | 'js' | 'shell' | 'bash'; code?: string; timeoutMs?: number }, exec: any) {
       if (!config.executeEnabled) throw new Error('context-mode: ctx_execute_file 未启用（executeEnabled=false）')
       const d = requireDb()
       const fs = ctx.get('fs') as { resolve?: (p: string, o?: any) => Promise<any>; readText?: (t: any, s?: any) => Promise<string> } | undefined
@@ -114,6 +116,10 @@ export function registerExecuteTools(ctx: { tools: { register(def: unknown): unk
         if (target == null) throw new Error('路径无法解析')
         if (!fs?.readText) throw new Error('fs.readText 不可用')
         src = await fs.readText(target, exec?.signal)
+        // R3-3（D-H2/B-06）：对称上限（与 read 门禁/ctx_index 一致），超限引导分片索引
+        if (byteLen(src) > (config.maxSourceBytes ?? 2_000_000)) {
+          throw new Error(`context-mode: 文件 ${args.path} 超过 ${config.maxSourceBytes ?? 2_000_000} 字节上限（B-06），请用 ctx_index 分片索引 + ctx_search。`)
+        }
       } catch (e) {
         if (e instanceof Error && e.message.startsWith('context-mode:')) throw e
         throw new Error(`context-mode: 读取文件失败 ${(e as Error).message}`) // P1①：前提/基础设施失败 throw（isError），而非成功值
@@ -136,7 +142,7 @@ export function registerExecuteTools(ctx: { tools: { register(def: unknown): unk
       concurrency: { type: 'number', description: '1-8，默认按 config' },
     },
     output: { schema: textSchema, render: (_args: unknown, v: { text: string }) => [{ type: 'text', text: v.text }] as any },
-    async execute(args: { commands: string[]; queries?: string[]; language?: string; concurrency?: number }, exec: any) {
+    async execute(args: { commands: string[]; queries?: string[]; language?: 'ts' | 'typescript' | 'js' | 'shell' | 'bash'; concurrency?: number }, exec: any) {
       if (!config.executeEnabled) throw new Error('context-mode: ctx_batch_execute 未启用（executeEnabled=false）')
       const d = requireDb()
       const sid = exec?.agent?.sessionId ?? 'anon'
@@ -146,8 +152,8 @@ export function registerExecuteTools(ctx: { tools: { register(def: unknown): unk
       const items = args.commands.map((cmd, i) => ({ cmd, i }))
       await concurrencyPool(items, concurrency, async (item) => {
         const res = await runSandbox(ctx, item.cmd, args.language ?? 'ts', { signal: exec?.signal })
-        const ref = `batch:${sid}:${hash(item.cmd)}`
-        try { deleteByRef(d, ref); addChunk(d, ref, `batch ${item.i + 1}`, res.text, ttl) } catch { /* 索引失败不阻塞 */ }
+        const ref = `batch:${sid}:${item.i}:${hash(item.cmd)}` // R4-6（B-01）：加下标唯一化，防同命令 ref 冲突
+        try { deleteByRef(d, ref); addChunk(d, ref, `batch ${item.i + 1}`, res.text, ttl) } catch (e) { console.warn('[context-mode] batch 索引失败:', (e as Error).message) } // R5-2（B-08f）：失败留痕
         results[item.i] = `[${item.i + 1}] ${res.text.slice(0, 500)}`
       })
       incMeta(d, 'execute_runs', args.commands.length)

@@ -30,7 +30,7 @@ export function registerStats(ctx: {
         const m = computeSavedBytes(deps.kdb.db)
         const executeRuns = getMeta(deps.kdb.db, 'execute_runs')
         const memoryChunks = getMeta(deps.kdb.db, 'memory_chunks')
-        saved = m.saved
+        saved = m.savedMeasured
         lines.push('context-mode 节约台账（knowledge db 持久化）：')
         lines.push(`  已索引: ${m.indexed} 字节`)
         lines.push(`  检索返还: ${m.search} 字节`)
@@ -45,7 +45,9 @@ export function registerStats(ctx: {
         lines.push(`  记忆捕获: ${memoryChunks} 个 chunk、${getMeta(deps.kdb.db, 'memory_bytes')} 字节`)
         // S7：measured 仅 read 侧口径，与 total 并列，勿单列 measured 当结论
         lines.push(`  kept_out_pct: measured=${m.keptOutMeasured.toFixed(1)}%（read 侧精确 + 洪水改道[下界]） | total=${m.keptOutTotal.toFixed(1)}%（含 索引-检索 粗差 + 命令串下界[估算]）`)
-        lines.push(`  预估节约: ${m.saved} 字节（≈${Math.round(m.saved / 4)} tokens）`)
+        // R5-1（D-H3）：默认只展示 measured（可证伪）；estimate 在 accountingLedger 明细单列，避免混口径高估。
+        lines.push(`  节约（measured，可证伪）: ${m.savedMeasured} 字节（≈${Math.round(m.savedMeasured / 4)} tokens）`)
+        if (deps.accountingLedger) lines.push(`  [明细] 节约（estimate，含索引-检索粗差+rejected 下界）: ${m.savedEstimate} 字节`)
       } else {
         lines.push('知识库未就绪，无法统计。')
       }

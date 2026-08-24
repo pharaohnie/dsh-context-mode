@@ -2,9 +2,11 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import fs from 'node:fs'
 import path from 'node:path'
-import { addChunk, deleteByRef, deleteExpired, incMeta, openKnowledgeDb, purgeChunks, searchChunks, type KnowledgeDb } from './sqlite.ts'
+import { addChunk, deleteByRef, deleteExpired, incMeta, setMeta, currentIndexedBytes, openKnowledgeDb, purgeChunks, searchChunks, type KnowledgeDb } from './sqlite.ts'
 import { chunkMarkdown } from './chunker.ts'
 import { concurrencyPool, urlToMarkdown } from './web.ts'
+import { type FloodGuard, createFloodGuard } from './flood-guard.ts'
+import { byteLen } from '../util/bytes.ts'
 
 /** ctx_search 默认输出字节预算（也与 advice/deny reason 中引用的「预算」对齐）。 */
 // P3-2：SEO 检索粒度常量。定位为内部常量（与 chunker maxBytes 一致，非部署差异点）——文案/召回粒度跟随知识库单元，
@@ -13,37 +15,31 @@ export const SEARCH_BUDGET_BYTES = 12000
 
 export interface KnowledgeToolsDeps {
   kdb: KnowledgeDb | null
-  config: { knowledgeBaseTtlMs: number; knowledgeBaseConcurrency: number; searchWindowMs?: number; searchMaxResultsAfter?: number; searchBlockAfter?: number }
+  config: { knowledgeBaseTtlMs: number; knowledgeBaseConcurrency: number; searchWindowMs?: number; searchMaxResultsAfter?: number; searchBlockAfter?: number; maxSourceBytes?: number }
+  /** P1：搜索 FloodGuard（per-agent-context 分桶）。由 index.ts 创建单例并共享给 ctx_doctor；缺省回退自建（行为等价）。 */
+  floodGuard?: FloodGuard
 }
 
-/** P2-1 搜索 FloodGuard：进程级时间窗滚动计数（对齐官方 SEARCH_WINDOW_MS/SEARCH_MAX_RESULTS_AFTER/SEARCH_BLOCK_AFTER）。
- *  窗口内前 searchMaxResultsAfter 次检索放行；之后 taper（减少返回条数）；到 searchBlockAfter 次后硬 block 并给引导。
- *  注：erasableSyntaxOnly 下不用 class，用闭包实现（TS 无类字段运行支持）。 */
-export function createFloodGuard(windowMs = 60_000, maxAfter = 3, blockAfter = 8): (now?: number) => 'ok' | 'taper' | 'block' {
-  const calls: number[] = []
-  return (now = Date.now()): 'ok' | 'taper' | 'block' => {
-    calls.push(now)
-    while (calls.length && now - calls[0] > windowMs) calls.shift()
-    if (blockAfter > 0 && calls.length > blockAfter) return 'block'
-    if (maxAfter > 0 && calls.length > maxAfter) return 'taper'
-    return 'ok'
-  }
-}
-
-function collectFiles(paths: string[], maxFiles = 2000): string[] {
+export function collectFiles(paths: string[], maxFiles = 2000, maxDepth = 32): string[] {
   const out: string[] = []
-  const walk = (p: string) => {
-    if (out.length >= maxFiles) return
+  const seen = new Set<string>()
+  const walk = (p: string, depth: number) => {
+    if (out.length >= maxFiles || depth > maxDepth) return
+    let real: string
+    try { real = fs.realpathSync(p) } catch { return } // 不存在/无权限 → 跳过
+    if (seen.has(real)) return // 环/重复防护（R1-4/B-08）
+    seen.add(real)
     let st
-    try { st = fs.statSync(p) } catch { return }
+    try { st = fs.lstatSync(p) } catch { return }
+    if (st.isSymbolicLink()) return // 不跟随 symlink：防环 + 防越界遍历（R1-4/B-08）
     if (st.isFile()) { out.push(p); return }
     if (st.isDirectory()) {
       let entries: string[] = []
       try { entries = fs.readdirSync(p) } catch { return }
-      for (const e of entries) walk(path.join(p, e))
+      for (const e of entries) walk(path.join(p, e), depth + 1)
     }
   }
-  for (const p of paths) walk(p)
+  for (const p of paths) walk(p, 0)
   return out
 }
 
@@ -54,24 +50,32 @@ const textSchema = {
     text: { type: 'string', required: true },
     count: { type: 'number', required: true },
   },
-}
+} as const
 
 export function registerKnowledgeTools(ctx: { tools: { register(def: unknown): unknown }; get(name: string): unknown }, deps: KnowledgeToolsDeps) {
   const { kdb, config } = deps
-  // P2-1：搜索 FloodGuard（时间窗滚动计数；windowMs<=0 或 blockAfter<=0 则关闭）
-  const floodHit = createFloodGuard(config.searchWindowMs ?? 60_000, config.searchMaxResultsAfter ?? 3, config.searchBlockAfter ?? 8)
+  // P1：搜索 FloodGuard（per-agent-context 分桶时间窗滚动计数；优先用 index.ts 传入的单例，供 doctor 观测）
+  const floodHit = deps.floodGuard ?? createFloodGuard(config.searchWindowMs ?? 60_000, config.searchMaxResultsAfter ?? 3, config.searchBlockAfter ?? 8)
   const requireDb = () => {
     if (!kdb) throw new Error('context-mode 知识库未就绪（目录不可写？）')
     return kdb.db
   }
-  // P1②：模型可调用路径的文件内容读取优先走 ctx.fs（受宿主审批/沙箱/文件治理）；ctx.fs 不可用时 fallback node:fs（fail-open，README 注明旁路边界）。
+  // R1-1（S-H1）：文件内容读取只走 ctx.fs（受宿主审批/沙箱/文件治理）；ctx.fs 缺失或 resolve 失败 → 抛错，绝不回退 node:fs 旁路。
   const readFileContents = async (path: string, exec: any): Promise<string> => {
     const ctxFs = ctx.get('fs') as { resolve?: (p: string, o?: any) => Promise<any>; readText?: (t: any, s?: any) => Promise<string> } | undefined
     if (ctxFs && typeof ctxFs.resolve === 'function' && typeof ctxFs.readText === 'function') {
       const target = await ctxFs.resolve(path)
-      if (target != null) return await ctxFs.readText(target, exec?.signal)
+      if (target != null) {
+        const src = await ctxFs.readText(target, exec?.signal)
+        // R3-3（D-H2/B-06）：单文件内容上限（对称于 read 门禁；防整读大文件进内存/worker 重编译）
+        if (byteLen(src) > (config.maxSourceBytes ?? 2_000_000)) {
+          throw new Error(`context-mode: 文件 ${path} 超过 ${config.maxSourceBytes ?? 2_000_000} 字节上限（B-06），请用 ctx_index 分片或 ctx_search。`)
+        }
+        return src
+      }
+      throw new Error(`context-mode: 路径 ${path} 无法经宿主 fs 解析（resolve 返回 null），已拒绝（不再回退 node:fs）。`)
     }
-    return fs.readFileSync(path, 'utf8')
+    throw new Error('context-mode: 宿主 fs 服务未挂载，ctx_index 拒绝读取（避免绕过文件治理）。请检查 ctx_doctor 的 fs 报告。')
   }
 
   ctx.tools.register(defineTool({
@@ -84,6 +88,7 @@ export function registerKnowledgeTools(ctx: { tools: { register(def: unknown): u
     output: { schema: textSchema, render: (_args: unknown, v: { text: string }) => [{ type: 'text', text: v.text }] as any },
     async execute(args: { paths: string[]; ttlMs?: number }, exec: any) {
       const d = requireDb()
+      deleteExpired(d) // R4-4（B-03）：入库前清理过期 chunk
       const files = collectFiles(args.paths)
       const ttl = args.ttlMs ?? config.knowledgeBaseTtlMs
       let chunks = 0
@@ -92,10 +97,10 @@ export function registerKnowledgeTools(ctx: { tools: { register(def: unknown): u
         try {
           deleteByRef(d, f) // replace-on-index：重索引前先删该 ref 旧 chunks，避免 db 随重复索引增长
           const src = await readFileContents(f, exec) // P1②：读文件内容走 ctx.fs（优先）/ fallback node:fs
-          for (const p of chunkMarkdown(src)) { addChunk(d, f, p.title, p.body, ttl); chunks++; bytes += p.body.length }
-        } catch { /* 单个文件读取失败跳过 */ }
+          for (const p of chunkMarkdown(src)) { addChunk(d, f, p.title, p.body, ttl); chunks++; bytes += byteLen(p.body) }
+        } catch (e) { console.warn('[context-mode] ctx_index 读取失败:', (e as Error).message) } // R5-2（B-08f）：失败留痕
       }
-      if (bytes > 0) incMeta(d, 'indexed_bytes', bytes)
+      if (bytes > 0) setMeta(d, 'indexed_bytes', currentIndexedBytes(d)) // R4-7（B-08d）：覆盖为当前在库字节，不再累加虚增
       return { text: `已索引 ${files.length} 个文件、${chunks} 个 chunk（${bytes} 字节）。`, count: chunks }
     },
   }))
@@ -112,11 +117,12 @@ export function registerKnowledgeTools(ctx: { tools: { register(def: unknown): u
       budgetBytes: { type: 'number', description: `输出字节预算（默认 ${SEARCH_BUDGET_BYTES}）` },
     },
     output: { schema: textSchema, render: (_args: unknown, v: { text: string }) => [{ type: 'text', text: v.text }] as any },
-    async execute(args: { query?: string; queries?: string[]; sort?: 'relevance' | 'timeline'; source?: string | string[]; topN?: number; budgetBytes?: number }) {
+    async execute(args: { query?: string; queries?: string[]; sort?: 'relevance' | 'timeline'; source?: string[]; topN?: number; budgetBytes?: number }, exec: any) {
       const d = requireDb()
       deleteExpired(d)
-      // P2-1：搜索 FloodGuard（时间窗滚动计数）。block → 拒绝给引导；taper → 减少返回条数（软上限）。
-      const gate = floodHit()
+      // P1：搜索 FloodGuard（per-agent-context 分桶）。key = agent.sessionId → 各子代理独立预算，并行 fan-out 不互相误伤（对齐官方 #769）。
+      // exec 可能缺失（如测试直调）→ key='default'（单桶回退，行为同旧实现）。
+      const gate = floodHit.record(exec?.agent?.sessionId)
       if (gate === 'block') {
         throw new Error('context-mode: 检索调用过于频繁（超过时间窗硬上限），已节流。请减少检索频率，或改用 ctx_execute_file/ctx_batch_execute 定向取数。')
       }
@@ -140,16 +146,17 @@ export function registerKnowledgeTools(ctx: { tools: { register(def: unknown): u
       let bytes = 0
       const clipped: typeof hitsArr = []
       for (const h of hitsArr) {
-        if (bytes + h.snippet.length > budget) break
-        bytes += h.snippet.length
+        const bl = byteLen(h.snippet)
+        if (bl > budget) continue // R4-5（B-04）：单条超预算跳过，避免首条超限断出空结果
+        if (bytes + bl > budget) break
+        bytes += bl
         clipped.push(h)
         if (clipped.length >= topN) break
       }
       const lines = clipped.map((h) => `[score ${h.score.toFixed(3)}] ${h.snippet}\n  ref: ${h.ref}`)
-      const returnedBytes = clipped.reduce((a, h) => a + h.snippet.length, 0)
+      const returnedBytes = clipped.reduce((a, h) => a + byteLen(h.snippet), 0)
       if (returnedBytes > 0) {
-        incMeta(d, 'search_bytes', returnedBytes)
-        incMeta(d, 'retrieval_bytes', returnedBytes) // P0-1：检索命中片段（真实进入上下文）分类记账
+        incMeta(d, 'search_bytes', returnedBytes) // R5-1（D-H3）：retrieval_bytes 与 search_bytes 同值冗余，已移除该记账
       }
       return { text: lines.length ? lines.join('\n') : '（无命中）', count: clipped.length }
     },
@@ -166,6 +173,7 @@ export function registerKnowledgeTools(ctx: { tools: { register(def: unknown): u
     output: { schema: textSchema, render: (_args: unknown, v: { text: string }) => [{ type: 'text', text: v.text }] as any },
     async execute(args: { urls: string[]; ttlMs?: number; concurrency?: number }) {
       const d = requireDb()
+      deleteExpired(d) // R4-4（B-03）：入库前清理过期 chunk
       const ttl = args.ttlMs ?? config.knowledgeBaseTtlMs
       const concurrency = args.concurrency ?? config.knowledgeBaseConcurrency
       let chunks = 0
@@ -177,10 +185,10 @@ export function registerKnowledgeTools(ctx: { tools: { register(def: unknown): u
           const { title, markdown } = await urlToMarkdown(url)
           const parts = chunkMarkdown(markdown)
           const labeled = parts.length ? parts : [{ title, body: markdown }]
-          for (const p of labeled) { addChunk(d, url, p.title, p.body, ttl); chunks++; bytes += p.body.length }
+          for (const p of labeled) { addChunk(d, url, p.title, p.body, ttl); chunks++; bytes += byteLen(p.body) }
         } catch (e) { errors.push(`${url}: ${(e as Error).message}`) }
       })
-      if (bytes > 0) incMeta(d, 'indexed_bytes', bytes)
+      if (bytes > 0) setMeta(d, 'indexed_bytes', currentIndexedBytes(d)) // R4-7（B-08d）：覆盖为当前在库字节
       return {
         text: `已抓取 ${args.urls.length} 个 URL、入库 ${chunks} 个 chunk（${bytes} 字节）${errors.length ? `，${errors.length} 个失败：${errors.join('; ')}` : '。'}`,
         count: chunks,
