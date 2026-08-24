@@ -77,7 +77,15 @@
 
 ### 3b. peerDeps 解析去 symlink hack：【已决策：做实验（方案 A），失败即回退方案 B】
 
-**方案 A（执行，约 10 分钟）**：
+> **实验结果（2026-08-24 执行完毕）：方案 A 及其变体均失败，已落地方案 B。**
+>
+> - **方案 A 失败（autoInstallPeers 路线）**：`autoInstallPeers: true` 时 `pnpm install` 被 `@deepseek-ai/dsh-deepresearch`（profile 既有直装插件）的 peer 声明 `^0.1.0-rc.6` 阻塞--semver prerelease 匹配规则下该范围与 next tag 的 0.1.1-rc.2 互斥，registry 无满足版本（`ERR_PNPM_NO_MATCHING_VERSION`）。已恢复 `autoInstallPeers: false`。
+> - **变体失败（显式依赖 + 删 symlink 路线）**：改为 profile 显式依赖 `@deepseek-ai/dsh-tools@next`（0.1.1-rc.2 装入 profile node_modules，turndown/schemastery 亦就位）后隐藏插件内 symlink 做静态 import 实验，报 `ERR_MODULE_NOT_FOUND`，且错误 base 为 realpath 后的 `/Users/pharaohnie/.dsh/plugins/dsh-context-mode/src/config.ts`--Node ESM 对模块路径 realpath，profile 逻辑路径上的 node_modules 不可达，symlink 不可删。symlink 已恢复，实验环境回滚。
+> - **已落地方案 B**：relink 脚本提升为 README 安装第 7.5 步（幂等）；`ctx_doctor` 新增「node_modules symlink（peerDeps 解析）」检查项（lstat/readlink + 目标含 dsh-tools 判定，失效时提示跑 relink）。
+> - **实验保留的合理产物**：插件 peer pin `^0.1.1-rc.2`（语义精确化）+ profile 显式依赖 `@deepseek-ai/dsh-tools@next`（与宿主同源，让 profile 更接近官方「peer 由安装方提供」模型，即使运行时解析仍走插件内 symlink）。
+> - **未验证的后续方向（A'，未获批未执行）**：将插件目录迁入 profile 树内（如 `$PROFILE_DIR/plugins/dsh-context-mode`），realpath 向上即可命中 profile node_modules，彻底消除 relink 依赖；需迁移目录 + 更新 workspace 登记，待用户另行决策。
+
+**方案 A 原始步骤（留档）**：
 1. 插件 `package.json` peerDependencies 中 `"@deepseek-ai/dsh-tools": "*"` pin 为 `"^0.1.1-rc.2"`（对齐宿主版本，避免 `*` 解析到旧 latest 0.0.1-rc.1）；
 2. profile `pnpm-workspace.yaml`：`autoInstallPeers: false` → `true`；
 3. profile 下 `pnpm install`（应装出 `profile/node_modules/@deepseek-ai/dsh-tools`）；

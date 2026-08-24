@@ -1,6 +1,9 @@
 // doctor.ts — ctx_doctor：诊断 context-mode 依赖的所有 seam 装配与知识库健康
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { DatabaseSync } from 'node:sqlite'
+import { existsSync, lstatSync, readlinkSync } from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { createSchema, smokeFts5, chunkStats, type KnowledgeDb } from './knowledge/sqlite.ts'
 import { envConfigOverrides } from './config.ts'
 import { type FloodGuard } from './knowledge/flood-guard.ts'
@@ -63,6 +66,25 @@ export function registerDoctor(ctx: { tools: { register(def: unknown): unknown }
       report('Node 全局（fetch/setTimeout/AbortController）',
         typeof fetch === 'function' && typeof setTimeout === 'function' && typeof AbortController === 'function',
         `fetch=${typeof fetch === 'function'} setTimeout=${typeof setTimeout === 'function'} AbortController=${typeof AbortController === 'function'}`)
+      // 3b 方案 B：node_modules symlink 健康检查。
+      // peerDeps（@deepseek-ai/dsh-tools 等）的运行时解析依赖插件目录内指向 DSH 安装的 node_modules symlink
+      // （Node ESM 对模块路径 realpath，profile 逻辑路径不可达）；DSH 经 npx 更新后 symlink 会指向旧缓存而断链。
+      try {
+        const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+        const nm = path.join(root, 'node_modules')
+        const st = lstatSync(nm, { throwIfNoEntry: false })
+        if (st && st.isSymbolicLink()) {
+          const target = readlinkSync(nm)
+          const toolsOk = existsSync(path.join(nm, '@deepseek-ai', 'dsh-tools', 'package.json'))
+          report('node_modules symlink（peerDeps 解析）', toolsOk,
+            `-> ${target}${toolsOk ? '' : '（目标缺 @deepseek-ai/dsh-tools：跑 relink-dsh-context-mode.sh）'}`)
+        } else {
+          report('node_modules symlink（peerDeps 解析）', false,
+            '缺失（非符号链接或不存在）：跑 relink-dsh-context-mode.sh 重建')
+        }
+      } catch (e) {
+        report('node_modules symlink（peerDeps 解析）', false, String((e as Error).message))
+      }
       // S3：分开报告「执行 substrate」与「文件策略」——勿把两者混报为同一 sandbox 模式
       const rt = deps.codeRuntime as { isolation?: unknown } | undefined
       report('codeRuntime（执行 substrate）', rt !== undefined,

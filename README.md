@@ -100,6 +100,17 @@ pnpm install --config.minimumReleaseAge=0
 
 预期：`node_modules/dsh-context-mode` 是符号链接，用 `readlink node_modules/dsh-context-mode` 应返回形如 `../../plugins/dsh-context-mode`（3 层相对路径）的字符串，`realpath` 解析为插件绝对路径，`package.json` 可读。
 
+### 7.5 建立/自愈插件内的 node_modules symlink
+
+peerDeps（`@deepseek-ai/dsh-tools` 等）的运行时解析依赖插件目录内的 `node_modules` 符号链接指向当前 DSH 安装（Node ESM 对模块路径 realpath，profile 侧的 `node_modules` 解析不到）。跑一次自愈脚本（幂等，已存在且有效时无副作用）：
+
+```bash
+cd "$HOME/.dsh/plugins/dsh-context-mode"
+./relink-dsh-context-mode.sh
+```
+
+预期输出 `✓ 已重指 ...` 且 `@deepseek-ai/dsh-tools`、`@deepseek-ai/schemastery`、`turndown` 三项均为 `✓`。`ctx_doctor` 的「node_modules symlink（peerDeps 解析）」检查项失效时也会指向这一步。
+
 ### 8. 重启 DSH
 
 ```bash
