@@ -1,6 +1,10 @@
 // index.ts — context-mode 插件入口（M0 骨架 + M1 知识库工具）
 // 相对导入一律带 .ts 后缀；erasable TS 语法（无 enum/namespace）
-import { Config, DEFAULT_CONFIG, envConfigOverrides, type ContextModeConfig } from './config.ts'
+import { writeFileSync } from 'node:fs'
+import { DEFAULT_CONFIG, envConfigOverrides, type ContextModeConfig } from './config.ts'
+// 合规修复（报告问题1）：按官方「插件配置」页要求，从入口导出同名 Schemastery Config schema，
+// loader 据此校验配置并填充未提供字段的默认值（此前仅 import 未导出，该机制整体空转）。
+export { Config } from './config.ts'
 import { registerDoctor, type DoctorDeps } from './doctor.ts'
 import { registerKnowledgeTools, SEARCH_BUDGET_BYTES } from './knowledge/tools.ts'
 import { registerExecuteTools } from './knowledge/execute.ts'
@@ -31,6 +35,19 @@ export function apply(ctx: {
   // 合规修复（报告问题2）：手动清理的资源用 ctx.effect 注册处置器（官方「第一个插件」/「生命周期」页）
   effect(fn: () => (() => void) | void): unknown
 }, rawConfig: Partial<ContextModeConfig>) {
+  // 【临时观测 · 修改一 1a】判定导出 Config 后 loader 是否应用 schema 默认值：
+  // rawConfig 稀疏（少量键）= 不填充（作者实测结论仍成立）；完整（全部 schema 键）= 填充生效。
+  // 观测完成后连同顶部 writeFileSync import 一并移除（见 COMPLIANCE_FIX_PLAN.md 修改一）。
+  try {
+    const raw: Record<string, unknown> = rawConfig ?? {}
+    writeFileSync('/tmp/context-mode-rawconfig.json', JSON.stringify({
+      observedAt: new Date().toISOString(),
+      keyCount: Object.keys(raw).length,
+      hasRoutingEnabled: Object.prototype.hasOwnProperty.call(raw, 'routingEnabled'),
+      routingEnabledValue: raw.routingEnabled ?? null,
+      keys: Object.keys(raw),
+    }, null, 2))
+  } catch { /* 观测失败不影响插件运行 */ }
   // 防御：loader 可能未对 config 应用 schema 默认，用显式 DEFAULT_CONFIG 兜底合并。
   // P3-1：env 覆盖插在 DEFAULT_CONFIG 与 rawConfig 之间（优先级 rawConfig > env > 默认）。
   const config: ContextModeConfig = { ...DEFAULT_CONFIG, ...envConfigOverrides(), ...rawConfig }
