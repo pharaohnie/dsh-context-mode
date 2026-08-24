@@ -11,7 +11,7 @@ export interface DoctorDeps {
   sessions: unknown
   approval: unknown
   kdb: KnowledgeDb | null
-  config?: { autoGuideRead: boolean; readAllowBounded: boolean; maxReadBytesBeforeAsk: number; trustedReadBasenames: string[]; trustedDocHeadroom: number; executeEnabled: boolean; executeAllowShell: boolean; memoryCapture: boolean; adviceStructured: boolean }
+  config?: { autoGuideRead: boolean; readAllowBounded: boolean; maxReadBytesBeforeAsk: number; trustedReadBasenames: string[]; trustedDocHeadroom: number; executeEnabled: boolean; executeAllowShell: boolean; memoryCapture: boolean; adviceStructured: boolean; securityEnabled?: boolean; securityAllowGlobs?: string[]; securityDenyGlobs?: string[]; boundedWhitelist?: string[]; searchWindowMs?: number; searchMaxResultsAfter?: number; searchBlockAfter?: number; subagentGuidance?: boolean }
   codeRuntime?: unknown
   fs?: unknown
   shell?: unknown
@@ -87,6 +87,17 @@ export function registerDoctor(ctx: { tools: { register(def: unknown): unknown }
           deps.config.autoGuideRead
             ? `已启用：阈值 ${deps.config.maxReadBytesBeforeAsk} 字节，bounded=${deps.config.readAllowBounded}，信任文档=${deps.config.trustedReadBasenames.length} 个（headroom×${deps.config.trustedDocHeadroom}）`
             : 'autoGuideRead=false -> read 从不门禁（回到现状）')
+      }
+      // P0-2 安全基线 + P1-2 白名单 + P2-1 搜索节流 + P2-3 子代理守卫 armed 状态（对齐官方 ctx_doctor 诊断）
+      if (deps.config) {
+        report('安全基线（securityEnabled）', deps.config.securityEnabled === true,
+          deps.config.securityEnabled === true ? `已启用：allow=${deps.config.securityAllowGlobs?.length ?? 0} 条，deny=${deps.config.securityDenyGlobs?.length ?? 0} 条` : '默认关闭（P0-2，避免强开打扰）')
+        report('结构白名单（boundedWhitelist）', Array.isArray(deps.config.boundedWhitelist) && deps.config.boundedWhitelist.length > 0,
+          `已启用：${deps.config.boundedWhitelist?.length ?? 0} 个无害命令零摩擦放行`)
+        report('搜索 FloodGuard（searchBlockAfter）', (deps.config.searchBlockAfter ?? 0) > 0,
+          `已启用：window=${deps.config.searchWindowMs ?? 60000}ms，软上限=${deps.config.searchMaxResultsAfter ?? 3}，硬上限=${deps.config.searchBlockAfter ?? 8}`)
+        report('子代理守卫（subagentGuidance）', deps.config.subagentGuidance === true,
+          deps.config.subagentGuidance === true ? '已启用：给子代理注入 context_window_protection' : '默认关闭（P2-3）')
       }
       // 知识库：真实路径可写 + schema 建表；FTS5 冒烟在内存库跑（避免污染真实数据）
       if (deps.kdb) {
