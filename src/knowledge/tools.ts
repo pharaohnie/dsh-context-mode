@@ -34,6 +34,8 @@ export function collectFiles(paths: string[], maxFiles = 2000, maxDepth = 32): s
     if (st.isSymbolicLink()) return // 不跟随 symlink：防环 + 防越界遍历（R1-4/B-08）
     if (st.isFile()) { out.push(p); return }
     if (st.isDirectory()) {
+      const dirName = path.basename(p)
+      if (dirName === '.git' || dirName === 'node_modules' || dirName === '.pnpm-store') return // 跳过二进制/隐藏目录（修复 .git 二进制扫描问题）
       let entries: string[] = []
       try { entries = fs.readdirSync(p) } catch { return }
       for (const e of entries) walk(path.join(p, e), depth + 1)
