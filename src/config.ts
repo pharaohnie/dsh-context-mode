@@ -104,9 +104,11 @@ export interface ContextModeConfig {
   subagentGuidance: boolean
 }
 
-/** 显式默认值：即便 loader 未对 config 应用 schema 默认，也用此兜底。
+/** 显式默认值：DEFAULT_CONFIG 兜底防御性保留。
  *  从 schema 推导（P3-1 单一来源）：schema 默认改了，DEFAULT_CONFIG 自动跟随，避免手写两份漂移。
- *  注：本插件实测 bundle 机制 loader 不应用 schemastery 默认值，故仍需要此兜底（环境事实，README 已记录）。 */
+ *  2026-08-25 实测：rc.2 loader 在入口导出 Config 后会填充全部带默认值键（rawConfig keyCount=34，
+ *  缺 maxReadDenyBytes 因其无 default）。保留理由：① env 覆盖「用户未显式配置」的判定基线；
+ *  ② 兜底非 loader 环境（单测直调 apply(ctx,{})）；③ 防御 loader 行为回退。旧注「实测不应用」作废。 */
 export const DEFAULT_CONFIG: ContextModeConfig = (Config['~standard'].validate({}) as { value: ContextModeConfig }).value
 
 /** P3-1 环境变量运行时覆盖（对齐官方 env 调参）。优先级：显式 rawConfig > env > DEFAULT_CONFIG。

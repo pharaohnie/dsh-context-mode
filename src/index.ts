@@ -34,9 +34,18 @@ export function apply(ctx: {
   // 合规修复（报告问题2）：手动清理的资源用 ctx.effect 注册处置器（官方「第一个插件」/「生命周期」页）
   effect(fn: () => (() => void) | void): unknown
 }, rawConfig: Partial<ContextModeConfig>) {
-  // 防御：loader 可能未对 config 应用 schema 默认，用显式 DEFAULT_CONFIG 兜底合并。
-  // P3-1：env 覆盖插在 DEFAULT_CONFIG 与 rawConfig 之间（优先级 rawConfig > env > 默认）。
-  const config: ContextModeConfig = { ...DEFAULT_CONFIG, ...envConfigOverrides(), ...rawConfig }
+  // loader 已应用 schema 默认（2026-08-25 实测：导出 Config 后 rawConfig keyCount=34，恰为全部带默认值键），
+  // rawConfig 到达即完整对象；若沿用旧三段合并 {...DEFAULT, ...env, ...rawConfig}，填充默认会把 CONTEXT_MODE_* 覆盖整体压掉。
+  // 故 env 改为「仅覆盖仍等于 DEFAULT_CONFIG 同名键的项」（视为用户未显式配置），保持调参通道有效。
+  const merged: ContextModeConfig = { ...DEFAULT_CONFIG, ...rawConfig }
+  for (const [k, v] of Object.entries(envConfigOverrides())) {
+    const key = k as keyof ContextModeConfig
+    // 数组键（trustedReadBasenames/boundedWhitelist/security*Globs）引用比较恒不等，须序列化比较
+    if (JSON.stringify(merged[key]) === JSON.stringify(DEFAULT_CONFIG[key])) {
+      ;(merged as unknown as Record<string, unknown>)[key] = v
+    }
+  }
+  const config = merged
   // R2-4（D-H1）：maxReadDenyBytes（语义对齐新键）优先；旧 maxReadBytesBeforeAsk 保留为 deprecated 兼容键。
   if (config.maxReadDenyBytes !== undefined) config.maxReadBytesBeforeAsk = config.maxReadDenyBytes
   // R5-3（D-L4）：只打印摘要（enabled flags + db 路径），不整包刷配置（避免策略/路径泄露与日志噪音）
