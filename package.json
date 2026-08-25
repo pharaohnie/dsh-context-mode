@@ -1,7 +1,7 @@
 {
   "name": "dsh-context-mode",
   "version": "0.1.0",
-  "description": "DSH context-window relief: knowledge base (ctx_index/search), routing enforcement (deny flood tools), and session continuity (post-compaction restore).",
+  "description": "DSH context-window relief: knowledge base (ctx_index/search), routing enforcement (deny flood tools), sandboxed execution (ctx_execute/batch Think-in-Code), and session continuity (post-compaction restore).",
   "type": "module",
   "main": "./src/index.ts",
   "license": "MIT",
@@ -11,6 +11,8 @@
     "context-window",
     "knowledge-base",
     "fts5",
+    "sandbox",
+    "code-execution",
     "plugin"
   ],
   "exports": {
