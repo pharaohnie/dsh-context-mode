@@ -1,6 +1,7 @@
 // knowledge/memory.ts — 会话记忆捕获（可检索，复用 meta/chunks）+ 近期记忆查询
 // 记忆类别 → ref 前缀：memory:user-prompt:<sid> / memory:decision:<sid> / memory:constraint:<sid> / memory:rejected-approach:<sid>
 // B3：记忆捕获默认 opt-in（memoryCapture:false）；TTL 默认非 0（7d）控制生命周期；调用方须过滤插件合成消息 + subagent 会话。
+import type { PluginEventEmitter } from '../types/dsh-events.ts'
 import { addChunk, deleteByRef, deleteExpired, incMeta, type KnowledgeDb } from './sqlite.ts'
 import { byteLen } from '../util/bytes.ts'
 
@@ -78,27 +79,27 @@ function textOfMessage(message: { content?: unknown }): string {
 
 /** 注册会话记忆捕获监听：user-prompt（agent/inbox/inserted）+ decision/constraint（agent/turn-stopping）。
  *  仅 memoryCapture=true 时生效；过滤 subagent 会话 + 插件合成消息（B3）；事件不存在/依赖缺失 → 静默降级。 */
-export function registerMemory(ctx: { on(event: string, listener: (...a: never[]) => unknown): void }, deps: MemoryRegisterDeps) {
+export function registerMemory(ctx: PluginEventEmitter, deps: MemoryRegisterDeps) {
   if (!deps.config.memoryCapture) return
-  ctx.on('agent/inbox/inserted' as never, (payload: any) => {
+  ctx.on('agent/inbox/inserted', (payload) => {
     try {
       const agent = payload?.agent
       const message = payload?.message
       if (!agent || !message) return
-      if (agent.origin === 'subagent' || agent.parentSession !== undefined) return
+      if (agent.session?.header?.origin === 'subagent' || agent.session?.header?.parentSession !== undefined) return
       if (message.source?.kind === 'plugin') return
-      const sid: string = agent.sessionId
+      const sid: string = agent.id
       if (!sid) return
       const text = textOfMessage(message)
       if (!text) return
       captureMemory(deps.kdb, 'user-prompt', sid, text, deps.config.memoryCapture, deps.config.memoryTtlMs)
     } catch { /* 静默 */ }
-  }) as never
-  ctx.on('agent/turn-stopping' as never, async (payload: any) => {
+  })
+  ctx.on('agent/turn-stopping', async (payload) => {
     try {
       const agent = payload?.agent
-      if (!agent || agent.origin === 'subagent' || agent.parentSession !== undefined) return
-      const sid: string = agent.sessionId
+      if (!agent || agent.session?.header?.origin === 'subagent' || agent.session?.header?.parentSession !== undefined) return
+      const sid: string = agent.id
       if (!sid) return
       const sq = deps.sessionQuery
       if (!sq || typeof sq.filterEvents !== 'function') return
@@ -117,5 +118,5 @@ export function registerMemory(ctx: { on(event: string, listener: (...a: never[]
         captureMemory(deps.kdb, kind, sid, text.slice(0, 600), deps.config.memoryCapture, deps.config.memoryTtlMs)
       }
     } catch { /* 静默 */ }
-  }) as never
+  })
 }

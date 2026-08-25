@@ -5,6 +5,7 @@
 //       因此 read 门禁（需 async stat）只能在 pre-execute 里做，guard 只保留 sync 的 bash-flood 兜底。
 import nodeFs from 'node:fs'
 import nodePath from 'node:path'
+import type { PluginEventEmitter } from '../types/dsh-events.ts' // P1-2：事件名/payload 编译期校验（本地显式事件类型）
 import { floodCommandWord, firstCommandWord, hasShellControlOps, FLOOD_WORDS } from '../util/shell-tokenize.ts' // R5-5（S-L1）：洪水词单源（shell-tokenize）
 
 /** 结构性有界判定（P1-2）：命令为白名单单命令 + 无 shell 控制运算符 → 无害，应零摩擦放行。
@@ -148,16 +149,15 @@ export interface GateDeps {
   contextNote?: () => string | undefined
 }
 
-export function registerGate(ctx: {
-  on(event: string, listener: (...a: never[]) => unknown): void
+export function registerGate(ctx: PluginEventEmitter & {
   get(name: string): unknown
 }, deps: GateDeps) {
-  ctx.on('tools/pre-execute' as never, async (exec: any, next: () => Promise<unknown>) => {
+  ctx.on('tools/pre-execute', async (exec, next) => {
     if (!deps.config.routingEnabled) return next()
     const name = exec?.name
-    const args = exec?.arguments ?? {}
+    const args = (exec?.arguments ?? {}) as Record<string, unknown>
     const reject = (reason: string) => {
-      const sid = exec?.agent?.sessionId
+      const sid = exec?.agent?.id
       if (sid) deps.recordRejected?.(sid, reason)
       deps.recordRejectedBytes?.(typeof reason === 'string' ? reason.length : 0)
     }
@@ -246,5 +246,5 @@ export function registerGate(ctx: {
       console.warn('[context-mode] 门禁异常（fail-open 放行）:', (e as Error).message)
       return next()
     }
-  }) as never
+  })
 }

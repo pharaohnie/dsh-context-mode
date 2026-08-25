@@ -1,5 +1,6 @@
 // index.ts — context-mode 插件入口（M0 骨架 + M1 知识库工具）
 // 相对导入一律带 .ts 后缀；erasable TS 语法（无 enum/namespace）
+import type { PluginEventEmitter } from './types/dsh-events.ts'
 import { DEFAULT_CONFIG, envConfigOverrides, type ContextModeConfig } from './config.ts'
 // 合规修复（报告问题1）：按官方「插件配置」页要求，从入口导出同名 Schemastery Config schema，
 // loader 据此校验配置并填充未提供字段的默认值（此前仅 import 未导出，该机制整体空转）。
@@ -29,7 +30,7 @@ export const inject = ['tools', 'systemPrompt']
 export function apply(ctx: {
   tools: { register(def: unknown): unknown; guard(fn: (exec: unknown) => string | undefined): unknown }
   systemPrompt: { section(s: unknown): unknown }
-  on(event: string, listener: (...a: never[]) => unknown): void
+  on: PluginEventEmitter['on']
   get(name: string): unknown
   // 合规修复（报告问题2）：手动清理的资源用 ctx.effect 注册处置器（官方「第一个插件」/「生命周期」页）
   effect(fn: () => (() => void) | void): unknown
