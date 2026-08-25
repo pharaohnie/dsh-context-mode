@@ -30,7 +30,7 @@ user-invocable: true
 | 带 `offset/limit` 且**单段有界**（limit ≤ 阈值）的精确读 | `read` | 只放行有界分段读，超大 limit 会被拒 |
 | 信任文档（README.md/CHANGELOG.md/LICENSE/AGENTS/package.json，去扩展名匹配、受 headroom 限制） | `read` | 可全量读（仍设上限防极端大文档） |
 | 大文件 / 整个目录 / 大量数据 / 需提取统计汇总 | `ctx_index` + `ctx_search`，或 `ctx_execute_file` | 索引后检索片段 |
-| 读文件做分析/摘要/抽取/统计 | `ctx_execute_file(path, code)` | FILE_SRC 引用内容，只回答案 |
+| 读文件做分析/摘要/抽取/统计 | `ctx_execute_file(path, code)` | FILE_SRC=完整内容字符串（勿再读文件/当路径），只回答案 |
 | 跑命令 / 调 API 要处理输出 | `ctx_execute(language, code)` | 沙箱里跑，只打印结论 |
 | 并行多命令 + 同轮检索 | `ctx_batch_execute(commands, queries)` | 一次往返，自动入库 |
 | 抓网页 / 外部文档 | `ctx_fetch_and_index(urls)` → `ctx_search` | 原始页面字节不进上下文 |
@@ -73,8 +73,11 @@ user-invocable: true
 | HTTP/API 调用、JSON | `ts`/`js` | 原生 fetch、JSON.parse、async/await |
 | 数据分析、CSV、统计 | `ts`/`js` | 原生 JSON/数组方法 |
 | 管道命令（grep/awk/jq） | `shell` | 默认开启 `executeAllowShell`（关闭时改用 ts 或 ctx_fetch_and_index） |
+| 需要 fs / npm 模块 / 命令行 | `shell` | ts/js 沙箱**无模块系统**（无 require/import），文件系统需求走 shell |
 
 > 注：`ctx_execute` 的 shell 路由**默认开启**（`executeAllowShell=true`）。当该开关被显式设为 false 时，shell 代码会被拒绝，此时改用 `ts` 或 `ctx_fetch_and_index`。
+>
+> **沙箱契约**：`code` 是 async function body（顶层 await/return 可用），**无 require/import/模块系统**，可用标准 JS 内置 + console.log；`ctx_execute_file` 的 `FILE_SRC` 是文件**完整内容（string）**，不要再读文件、不要当路径用。
 
 ## 搜索策略（ctx_search）
 
@@ -104,6 +107,7 @@ user-invocable: true
 - 把 MCP/工具响应再喂给 `ctx_index` 的路径 → 上下文翻倍；已加载直接用或先落盘再索引。
 - 忽略 `browser_snapshot` 等大输出工具 → 其输出可能 100K+ token；存文件 → `ctx_index(path)` → `ctx_search`。
 - 把 `ctx_stats` 当能重置的工具 → 它只读；清库用 `ctx_purge`。
+- 在 code 里写 `require("node:fs")` / `import fs` → 沙箱无模块系统，直接 `ReferenceError`。FILE_SRC 已是文件完整内容，直接处理；要文件系统/命令行走 `language:"shell"`。
 
 ## 会话恢复
 

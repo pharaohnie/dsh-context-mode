@@ -171,6 +171,8 @@ deny 的 reason 直接告诉模型下一步该用什么，不是干巴巴一句"
 
 `ctx_execute` 复用 DSH 的 `codeRuntime`（worker 隔离、空环境、heap 上限、硬中断），模型写一段程序，只把 `console.log` 和返回值得回来。`ctx_execute_file` 读一个文件的内容作为 `FILE_SRC` 数据、对它跑分析代码，比如"统计这个日志里 error 出现几次"，文件本体不进上下文。`ctx_batch_execute` 并行跑多段程序，结果自动入库，同一轮还能用 `queries` 检索。
 
+**沙箱契约**：`code` 是 async function body（顶层 await/return 可用），但**无 require/import/模块系统**——写 `require("node:fs")` 会直接 `ReferenceError: require is not defined`；`ctx_execute_file` 的 `FILE_SRC` 已是文件**完整内容（string）**，直接处理它，不要再读文件/当路径用。需要文件系统或命令行时改用 `language:"shell"`（默认开启）或原生 bash 工具。命中模块系统误用时错误信息会附带改写指引。
+
 ### 附加
 
 - **`ctx_doctor`**：诊断装配状态。硬依赖、可选服务、门禁 armed、FTS5 冒烟、知识库分片、实际生效的 env 覆盖，一行一个 ✓ 或 ✗。
