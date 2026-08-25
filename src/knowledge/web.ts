@@ -31,11 +31,15 @@ export function assertSafeUrl(url: string): void {
   if (blocked) throw new Error(`context-mode: 拒绝抓取内网/特殊地址 ${host}（SSRF 防护）`)
 }
 
-/** 抓取一个 URL 并转 markdown。失败抛错（含超时/非 2xx/超限/SSRF 拒绝）。redirect: manual 逐跳校验 Location。 */
-export async function urlToMarkdown(url: string, timeoutMs = 30000): Promise<UrlMarkdown> {
+/** 抓取一个 URL 并转 markdown。失败抛错（含超时/非 2xx/超限/SSRF 拒绝/外部取消）。redirect: manual 逐跳校验 Location。
+ *  P1-6：支持外部 AbortSignal（官方 execute 契约：转发 exec.signal，取消后整条重定向链即刻中止）。 */
+export async function urlToMarkdown(url: string, opts: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<UrlMarkdown> {
   assertSafeUrl(url)
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  const timer = setTimeout(() => controller.abort(new Error('context-mode: 抓取超时')), opts.timeoutMs ?? 30000)
+  const onOuterAbort = () => controller.abort()
+  if (opts.signal?.aborted) controller.abort() // 已取消竞态防御：直接中止，不发请求
+  else opts.signal?.addEventListener('abort', onOuterAbort, { once: true })
   try {
     let current = url
     let res = await fetch(current, { signal: controller.signal, redirect: 'manual' })
@@ -62,6 +66,7 @@ export async function urlToMarkdown(url: string, timeoutMs = 30000): Promise<Url
     return { title, markdown }
   } finally {
     clearTimeout(timer)
+    opts.signal?.removeEventListener('abort', onOuterAbort)
   }
 }
 

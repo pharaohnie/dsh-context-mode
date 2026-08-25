@@ -171,7 +171,7 @@ export function registerKnowledgeTools(ctx: { tools: { register(def: unknown): u
       concurrency: { type: 'number', description: '并发 1-8（默认按 config）' },
     },
     output: { schema: textSchema, render: (_args: unknown, v: { text: string }) => [{ type: 'text', text: v.text }] as any },
-    async execute(args: { urls: string[]; ttlMs?: number; concurrency?: number }) {
+    async execute(args: { urls: string[]; ttlMs?: number; concurrency?: number }, exec: any) {
       const d = requireDb()
       deleteExpired(d) // R4-4（B-03）：入库前清理过期 chunk
       const ttl = args.ttlMs ?? config.knowledgeBaseTtlMs
@@ -182,7 +182,7 @@ export function registerKnowledgeTools(ctx: { tools: { register(def: unknown): u
       await concurrencyPool(args.urls, concurrency, async (url) => {
         try {
           deleteByRef(d, url) // replace-on-index：重抓先删该 URL 旧 chunks
-          const { title, markdown } = await urlToMarkdown(url)
+          const { title, markdown } = await urlToMarkdown(url, { signal: exec?.signal })
           const parts = chunkMarkdown(markdown)
           const labeled = parts.length ? parts : [{ title, body: markdown }]
           for (const p of labeled) { addChunk(d, url, p.title, p.body, ttl); chunks++; bytes += byteLen(p.body) }
