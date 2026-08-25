@@ -4,7 +4,7 @@
 //     并加「自我调控」信号（本会话读了很多/连读同目录→改 ctx_index(目录)+ctx_search）。
 // 依据：DSH tools/pre-execute 无法做非阻塞软引导（next() 不回流提示、contextNote 只在 deny 送达），
 //       故 runtime 累计/目录信号并入本指引文本，由模型自判（M1/M2/M3）。
-// order=30（紧跟 persona/identity 后、任务上下文前），提高「何时用」的关注度。
+// order=100（官方 tool guidance 区间 100–199 下界），保持全局路由策略最高关注度。
 export interface AdviceDeps {
   enabled: boolean
   maxReadBytesBeforeAsk: number
@@ -107,7 +107,7 @@ export function registerAdvice(ctx: { systemPrompt: { section(s: unknown): unkno
     : buildLean(deps)
   ctx.systemPrompt.section({
     name: 'context-mode',
-    order: 30,
+    order: 100,
     text,
   })
 }
