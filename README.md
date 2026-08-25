@@ -34,73 +34,28 @@ cd "$HOME/.dsh/plugins/dsh-context-mode"
 
 默认：`$HOME/.dsh/profiles/web/`。如果不是，改用你自己的 profile 目录。后续命令里的 `PROFILE_DIR` 指它。
 
-如果 `PROFILE_DIR` 下没有 `pnpm-workspace.yaml`，说明该 profile 不是 pnpm 工作区，**先停**——本插件依赖 workspace 协议（避免 `link:` 协议下符号链接被 pnpm 重建为错误层级的问题），非工作区 profile 不适用，告诉用户这个事实。
+无需手动改 `pnpm-workspace.yaml` 或 profile 的 `package.json`——下一步的官方命令会自动完成 `link:` 依赖写入与 bundles 登记（2026-08-24 已从旧的 workspace 手动方案迁移至官方路径）。
 
-### 4. 修改 `pnpm-workspace.yaml`
-
-把插件目录加进 `packages` 数组（保持其他项不动）：
+### 4. 官方单命令安装
 
 ```bash
-# 用 Edit 工具在 pnpm-workspace.yaml 的 packages 列表里加上插件绝对路径
+dsh plugin --profile web add "$HOME/.dsh/plugins/dsh-context-mode"
 ```
 
-示例（修改后，`packages` 项下）：
+一条命令完成全部登记（2026-08-24 起为权威路径）：
 
-```yaml
-packages:
-  - .
-  - /Users/yourname/.dsh/plugins/dsh-context-mode
-```
+- profile `package.json` 的 `dependencies` 写入 `"dsh-context-mode": "link:<插件绝对路径>"`；
+- `dsh.profile.bundles` 数组追加 `"dsh-context-mode"`；
+- 包内自带的 `cordis.patch.yml`（纯 insert）随 bundle 层生效。
 
-### 5. 修改 `package.json`（profile 目录）
+**不要**再做以下任何手动操作（旧版 README 的做法，已废弃）：
 
-`dependencies` 里加：
+- 把插件路径加进 `pnpm-workspace.yaml`，或手写 `"dsh-context-mode": "workspace:*"`；
+- 在 profile 的 `cordis.patch.yml` 里 insert `context-mode` 行——bundles 已登记后再 insert 同 id 会触发 `duplicate loader entry id: context-mode`，cordis 拒绝启动（profile cordis.patch.yml 头部注释同此警告）。
 
-```json
-"dsh-context-mode": "workspace:*"
-```
+若 dshmarket 安装/卸载其他插件时重写 profile `package.json` 致 bundles 登记丢失，重新执行一次 add 即可恢复。
 
-**重要**：`dsh.profile.bundles` 里**不要**有 `dsh-context-mode`——本插件改用 patch 层 insert（下一步），两者同时存在会触发 `duplicate loader entry id: context-mode`，cordis 拒绝启动。如果之前按旧版 README 加过，从 bundles 数组里删掉。
-
-### 6. 修改 `cordis.patch.yml`（profile 根目录）
-
-这是用户 patch 层，DSH loader 每次启动都会应用，比 `dsh.profile.bundles` 更持久（dshmarket 安装/卸载其他插件会重写 `package.json`，bundles 里的登记可能丢失，patch 层不会）。
-
-文件通常已存在（dshmarket 写 disabled 标记也会写它），可能是 `[]` 或已有 disable 块。在文件**末尾追加**：
-
-```yaml
-- insert:
-    - id: context-mode
-      name: 'dsh-context-mode'
-```
-
-格式严格要求：
-- 顶格写 `- insert:`（不是缩进）
-- 下一行 `    - id: ...`（4 空格缩进）
-- `name` 字段必须是字符串 `'dsh-context-mode'`（插件 package.json 的 name）
-
-`yaml.safe_load` 必须能解析为合法数组。用下面任一命令验证：
-
-```bash
-python3 -c "import yaml; print(yaml.safe_load(open('cordis.patch.yml')))"
-```
-
-```bash
-node -e 'console.log(require("js-yaml").load(require("fs").readFileSync("cordis.patch.yml","utf8")))'
-```
-
-### 7. 跑 pnpm install
-
-```bash
-cd "$PROFILE_DIR"
-pnpm install --config.minimumReleaseAge=0
-```
-
-`--config.minimumReleaseAge=0` 绕过 dshmarket 的发布时间策略（如果你的 profile 里其他包的锁文件条目是今天发布的）。如果不需要可去掉。
-
-预期：`node_modules/dsh-context-mode` 是符号链接，用 `readlink node_modules/dsh-context-mode` 应返回形如 `../../plugins/dsh-context-mode`（3 层相对路径）的字符串，`realpath` 解析为插件绝对路径，`package.json` 可读。
-
-### 7.5 建立/自愈插件内的 node_modules symlink
+### 5. 建立 peerDeps 解析 symlink
 
 peerDeps（`@deepseek-ai/dsh-tools` 等）的运行时解析依赖插件目录内的 `node_modules` 符号链接指向当前 DSH 安装（Node ESM 对模块路径 realpath，profile 侧的 `node_modules` 解析不到）。跑一次自愈脚本（幂等，已存在且有效时无副作用）：
 
@@ -111,20 +66,20 @@ cd "$HOME/.dsh/plugins/dsh-context-mode"
 
 预期输出 `✓ 已重指 ...` 且 `@deepseek-ai/dsh-tools`、`@deepseek-ai/schemastery`、`turndown` 三项均为 `✓`。`ctx_doctor` 的「node_modules symlink（peerDeps 解析）」检查项失效时也会指向这一步。
 
-### 8. 重启 DSH
+### 6. 重启 DSH
 
-```bash
-dsh restart
-# 或在 dshmarket UI 点「重启」
-```
+在 dshmarket UI 点「重启」，或重启 dsh web 服务进程。（注意：dsh CLI 没有 restart 子命令，`dsh restart` 不是有效命令。）
 
-### 9. 验证
+### 7. 验证
+
+`readlink node_modules/dsh-context-mode`（在 profile 目录）应返回形如 `../../../plugins/dsh-context-mode`（相对 node_modules 共 3 层 `..`），`realpath` 解析为插件绝对路径，`package.json` 可读。
 
 跑 `ctx_doctor`，预期输出（每行一个 ✓ 或 ✗，关键项都是 ✓）：
 
 - ✓ tools（硬）
 - ✓ systemPrompt（硬）
 - ✓ codeRuntime（执行 substrate）
+- ✓ node_modules symlink（peerDeps 解析）
 - ✓ read 整读门禁 — 已启用
 - ✓ 结构白名单（boundedWhitelist）
 - ✓ 搜索 FloodGuard
@@ -132,18 +87,25 @@ dsh restart
 - ✓ 知识库分片 — live N / expired 0 / total N
 - ✓ FTS5 冒烟
 
+注：会话记忆捕获 / 安全基线 / 子代理守卫三项显示 ✗ 属预期——它们默认关闭（opt-in），非故障。
+
 跑 `curl http://127.0.0.1:3080/dsh-market/installed | python3 -c "import json,sys; d=json.load(sys.stdin); v=d['activation']['dsh-context-mode']; print(v['state'], v['hot'])"`，预期：`live True`。
 
 ### 故障排查
 
 | 症状 | 原因 | 修复 |
 |---|---|---|
-| `dshmarket` 状态显示「未安装 / not installed」 | `node_modules/dsh-context-mode` 符号链接坏（`realpath` 不存在） | 重跑 `pnpm install --config.minimumReleaseAge=0`；若仍坏，确认用 `workspace:*` 而非 `link:` |
-| `duplicate loader entry id: context-mode` 启动失败 | `dsh.profile.bundles` 里同时有 `dsh-context-mode` | 从 bundles 数组里删除那一项 |
+| `dshmarket` 状态显示「未安装 / not installed」 | `node_modules/dsh-context-mode` 符号链接坏（`realpath` 不存在） | 重新执行 `dsh plugin --profile web add "$HOME/.dsh/plugins/dsh-context-mode"`（官方路径写的就是 `link:`） |
+| `duplicate loader entry id: context-mode` 启动失败 | bundles 与 patch 层同时登记了 context-mode | 从 profile 的 `cordis.patch.yml` 删除 insert 行（保留 bundles 登记）——bundles 是权威层 |
 | `ERR_MODULE_NOT_FOUND`（如找不到 `@deepseek-ai/dsh-tools`） | 插件自己的 `node_modules` symlink 指向了旧 DSH npx 缓存 | 跑 `~/.dsh/plugins/dsh-context-mode/relink-dsh-context-mode.sh` |
 | `ctx_doctor` 显示 `✗ read 整读门禁` | `routingEnabled: false` | 默认 true；显式设了 `false` 改回，或在 `cordis.patch.yml` 的 insert 行加 `config: { routingEnabled: true }`（但会让 dshmarket 热挂载失败，需重启才生效） |
 
-> 依赖自愈：DSH 经 `npx` 更新后，插件 `node_modules` 可能还指着旧 npx 缓存，报 `ERR_MODULE_NOT_FOUND`。跑一次插件目录的 `./relink-dsh-context-mode.sh`（或重新 `pnpm install`）即可。脚本只重设那个 symlink，不动配置和数据。
+> 依赖自愈：DSH 经 `npx` 更新后，插件 `node_modules` 可能还指着旧 npx 缓存，报 `ERR_MODULE_NOT_FOUND`。跑一次插件目录的 `./relink-dsh-context-mode.sh`（或重新执行 add 命令）即可。脚本只重设那个 symlink，不动配置和数据。
+
+## 入口形态与分发边界
+
+- **本地 link 直载（当前形态）**：合法。`main` 指向 `src/index.ts`，依赖 Node ≥ 24 type-stripping；link: 的 symlink realpath 使插件目录脱离 node_modules，绕开 `ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`。
+- **npm/git registry 发布（未来）**：必须预构建 dist 并把入口切到构建产物（`pnpm run build` 已就绪）；git 直装还需用户在 profile 配 allowBuilds 构建授权。
 
 ## 原理
 
@@ -220,6 +182,6 @@ Schemastery schema 定义，默认知识库在 `~/.context-mode/content`。大�
 
 DSH `v0.1.1-rc.2`，Node ≥ 24（`node:sqlite` 自带 FTS5，免编译；type-stripping 直接加载 `.ts`）。知识库走 WAL 模式，多进程共享时防写锁。
 
-**入口即源码**：`package.json` 的 `main` 指向 `src/index.ts`，依赖上述 type-stripping 能力，无构建产物（`dist/` 已移除，`src/` 是唯一事实源）。发布前需按官方规范补 `"prepare": "tsc -p tsconfig.json"` 并把 `main` 切到 `dist/index.js`（动作清单见 `COMPLIANCE_FIX_PLAN.md` 3c 方案 B 留档）。
+**入口即源码**：`package.json` 的 `main` 指向 `src/index.ts`，依赖上述 type-stripping 能力，无构建产物（`dist/` 已移除，`src/` 是唯一事实源）。npm/git registry 发布前需预构建 dist 并切换入口（`pnpm run build` 已就绪；发布路线选型为待决策项）。
 
 纯逻辑回归跑 `node scripts/smoke.ts`：覆盖 FloodGuard 分桶、chunkStats、advice 构建、SSRF 防护、FTS5 非法查询转义、read 门禁判定。不需要 DSH 运行时，Node 直跑。
