@@ -184,7 +184,7 @@ export function registerGate(ctx: {
           const reason = `context-mode: 这条 bash 命令较长（约 ${len} 字节 > 阈值 ${deps.config.bashNudgeMinCommandBytes}），且看起来要拿到较大输出。若你要对结果做分析/计数/过滤/多查询，请改用 ctx_execute(language:"ts", code) 或 ctx_batch_execute(commands, queries)（沙箱里只回答案）；确需看输出用 read 带 offset/limit。`
           // P1 软引导：有审批时 ask（把改用 ctx_* 的提示交给模型/用户裁决）；无审批通道时放行（绝不误拦合法命令）。
           if (deps.hasApproval()) return { kind: 'ask', reason }
-          console.warn('[context-mode] 无审批通道：长 bash 命令放行（仅记录，不拦截）:', String(args.command).slice(0, 120)) // R5-6（S-L2）：与 doctor 文案「放行+警告」对齐
+          console.warn(`[context-mode] 无审批通道：长 bash 命令放行（${String(args.command).length} 字节，仅记录不拦截）`) // R5-6（S-L2）+ P0-2：只记长度不记内容，防命令内嵌凭据泄露进日志
           return next()
         }
       }
