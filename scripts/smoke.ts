@@ -5,6 +5,7 @@
 import { createFloodGuard } from '../src/knowledge/flood-guard.ts'
 import { createSchema, chunkStats, addChunk, searchChunks } from '../src/knowledge/sqlite.ts'
 import { buildStructured, buildLean } from '../src/routing/advice.ts'
+import { sandboxErrorHint } from '../src/knowledge/execute.ts'
 import { assertSafeUrl } from '../src/knowledge/web.ts'
 import { collectFiles } from '../src/knowledge/tools.ts'
 import { readFloodDecision } from '../src/routing/gate.ts'
@@ -106,6 +107,24 @@ function check(name: string, cond: boolean, detail = '') {
   const lean = buildLean(adviceDeps)()
   check('P5 lean 含层级概要', lean.includes('层级'))
   check('P5 lean 含 ctx_commands 触发词', lean.includes('ctx purge'))
+  // A3（2026-08-25）：沙箱契约关键词必须出现在两种引导文本中
+  check('P5 structured 含沙箱契约（require 不可用）', structured.includes('无 require/import'))
+  check('P5 structured 含 FILE_SRC 契约', structured.includes('完整内容'))
+  check('P5 lean 含沙箱契约精简版', lean.includes('无 require/import'))
+}
+
+// ── A2：sandboxErrorHint（沙箱无模块系统错误的改写指引）──
+{
+  const hitRequire = sandboxErrorHint('ReferenceError: require is not defined')
+  check('A2 require 未定义命中', hitRequire.includes('无模块系统'), hitRequire.slice(0, 30))
+  check('A2 Cannot use import statement 命中', sandboxErrorHint('SyntaxError: Cannot use import statement outside a module').length > 0)
+  check('A2 module 未定义命中', sandboxErrorHint('ReferenceError: module is not defined').length > 0)
+  check('A2 import 未定义命中', sandboxErrorHint('ReferenceError: import is not defined').length > 0)
+  check('A2 普通 ReferenceError 不命中', sandboxErrorHint('ReferenceError: foo is not defined') === '')
+  check('A2 undefined 错误不命中', sandboxErrorHint('TypeError: Cannot read properties of undefined') === '')
+  check('A2 空串安全', sandboxErrorHint('') === '')
+  check('A2 指引含 FILE_SRC 改写方向', hitRequire.includes('FILE_SRC'))
+  check('A2 指引含 shell 逃生口', hitRequire.includes('shell'))
 }
 
 // ── P4：envConfigOverrides（依赖 schemastery，不可用则 SKIP 不计失败）──

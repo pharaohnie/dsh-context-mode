@@ -66,6 +66,10 @@ analyze logs · summarize output · process data · parse JSON · filter results
 - read > ${threshold} 字节(≈${thresholdTokens} tokens) whole → denied；用 ctx_index+ctx_search，或 read 带**有界** offset/limit（limit ≤ ${threshold}）
 - ctx_* 的 shell 路由已被显式关闭 → 用 js/ts，或 ctx_fetch_and_index
 
+## 沙箱契约（ctx_execute*）
+- code 是 async function body：顶层 await/return 可用；**无 require/import/模块系统、无 fs**（需要文件系统/命令行 -> language:"shell" 或 bash 工具）。
+- ctx_execute_file 的 FILE_SRC 是文件**完整内容（string）**，不要再读文件、不要当路径。
+
 ## ctx_execute vs run_code
 ctx_execute = context-mode 受引导的 codeRuntime 封装（带记账/批量/记忆/改道）；run_code = DSH 原生沙箱。底层同 codeRuntime；优先 ctx_execute。
 
@@ -90,6 +94,7 @@ export function buildLean(deps: AdviceDeps): () => string {
 - 本会话已 Read 了很多文件 → 改用 ctx_index(目录)+ctx_search。
 - 大文件 > ${threshold} 字节：先 ctx_index 再 ctx_search；确需分段用 read 带**有界** offset/limit（limit ≤ ${threshold}）。
 - 计算/分析用 ctx_execute(language:"ts", code) 只 console.log 答案；批量用 ctx_batch_execute。
+- ctx_execute* 的 code 无 require/import（无模块系统/无 fs）；FILE_SRC=文件完整内容字符串，勿再读文件；要 fs/命令行走 language:"shell"。
 - 抓网页用 ctx_fetch_and_index（不要 curl/wget）。
 - 层级：0 记忆恢复(先 ctx_search timeline memory:) → 1 并行收集(ctx_batch_execute) → 2 追问(ctx_search queries 批量) → 3 加工(ctx_execute/ctx_execute_file)。
 - "ctx stats" / "ctx doctor" / "ctx purge" → 调对应工具。`

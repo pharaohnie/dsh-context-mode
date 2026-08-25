@@ -44,6 +44,16 @@ function hash(s: string): string {
 
 export interface RunSandboxOpts { signal?: AbortSignal; timeoutMs?: number }
 
+/** 已知的「沙箱无模块系统」错误特征（A2，2026-08-25 修正计划）：codeRuntime 程序体是严格模式 AsyncFunction
+ *  （bindings + console shim），无 require/import；模型误用模块系统时按此追加改写指引。 */
+const SANDBOX_MODULE_ERROR = /require is not defined|module is not defined|cannot use import statement|import is not defined/i
+
+/** 命中已知「沙箱无模块系统」错误时返回改写指引，否则返回空串（纯函数，供 smoke 直测）。 */
+export function sandboxErrorHint(message: string): string {
+  if (!message || !SANDBOX_MODULE_ERROR.test(message)) return ''
+  return '提示：沙箱无模块系统（require/import 均不可用）。直接使用已注入的变量（如 FILE_SRC，已是文件完整内容字符串）与标准 JS 内置；需要文件系统或命令行请改用 language:"shell" 或原生 bash 工具。'
+}
+
 /** 在沙箱里运行一段程序，只回 {text,count}。
  *  基础设施/前提失败（shell 不可用/语言不支持/codeRuntime 未挂载）→ throw（框架视为 isError，P1①）。
  *  程序自身失败（CodeRunResult.error；run() 不 reject，error 是结果字段）→ 返回错误文本（这是结果而非基础设施异常）。 */
@@ -60,7 +70,11 @@ export async function runSandbox(ctx: { get(name: string): unknown }, code: stri
   const rt = ctx.get('codeRuntime') as { run?: (req: any) => Promise<any> } | undefined
   if (!rt || typeof rt.run !== 'function') throw new Error('context-mode: codeRuntime 未挂载（宿主未提供）')
   const res = await rt.run({ program: code, bindings: [], signal: opts.signal })
-  if (res?.error) return { text: `context-mode: codeRuntime 失败 [${res.error.kind}] ${res.error.message}`, count: 0 }
+  if (res?.error) {
+    // A2：命中已知模块系统误用时追加改写指引，模型一步自愈
+    const hint = sandboxErrorHint(String(res.error.message ?? ''))
+    return { text: `context-mode: codeRuntime 失败 [${res.error.kind}] ${res.error.message}${hint ? '\n' + hint : ''}`, count: 0 }
+  }
   const logs = Array.isArray(res?.logs) ? res.logs.join('\n') : ''
   const value = res?.value === undefined ? '' : serializeValue(res.value)
   return { text: [logs, value].filter(Boolean).join('\n'), count: 1 }
@@ -82,7 +96,7 @@ export function registerExecuteTools(ctx: { tools: { register(def: unknown): unk
     description: '在沙箱里运行模型写的一段程序（Think-in-Code），只把 stdout+返回值得回上下文，原始数据留在沙箱。何时用：分析/统计/过滤/比较/搜索/解析/转换数据、跑程序/调 API、处理大输出时——代替 bash 直跑拿大输出。当你要处理/分析/汇总大输出、或跑命令要拿结果时用，结果只回答案，原始数据留沙箱。',
     parameters: {
       language: { type: 'string', enum: ['ts', 'typescript', 'js', 'shell', 'bash'], description: '默认 ts；shell 路由默认开启（executeAllowShell=true）' },
-      code: { type: 'string', required: true, description: '程序体（async function body，支持顶层 await/return，返回值即 value）' },
+      code: { type: 'string', required: true, description: '程序体（async function body，支持顶层 await/return，返回值即 value）。无 require/import（沙箱无模块系统），可用标准 JS 内置 + console.log；要文件系统/命令行请改用 language:"shell" 或 bash 工具' },
       timeoutMs: { type: 'number', description: '可选信号；不传归由宿主 computeMs/maxWallMs 预算' },
     },
     output: { schema: textSchema, render: (_args: unknown, v: { text: string }) => [{ type: 'text', text: v.text }] as any },
@@ -101,7 +115,7 @@ export function registerExecuteTools(ctx: { tools: { register(def: unknown): unk
     parameters: {
       path: { type: 'string', required: true, description: '要作为数据分析的文件路径' },
       language: { type: 'string', enum: ['ts', 'typescript', 'js', 'shell', 'bash'], description: '分析代码语言，默认 ts' },
-      code: { type: 'string', description: '分析程序（在 codeRuntime 跑，可用 FILE_SRC 变量引用文件内容）' },
+      code: { type: 'string', description: '分析程序（async function body，顶层 await/return 可用）。FILE_SRC 已是该文件完整内容（string），直接处理它、不要再读文件/当路径用；无 require/import（沙箱无模块系统）' },
       timeoutMs: { type: 'number' },
     },
     output: { schema: textSchema, render: (_args: unknown, v: { text: string }) => [{ type: 'text', text: v.text }] as any },
@@ -136,7 +150,7 @@ export function registerExecuteTools(ctx: { tools: { register(def: unknown): unk
     name: 'ctx_batch_execute',
     description: '并行跑多段程序、各自结果自动入库（batch:<sid>:<hash>），同轮可用 queries 检索命中片段。何时用：一次要并行多段计算/命令并同轮检索时，一调多用替代多次分开调用；并发 1-8。',
     parameters: {
-      commands: { type: 'array', required: true, items: { type: 'string' }, description: '一段段程序' },
+      commands: { type: 'array', required: true, items: { type: 'string' }, description: '一段段程序（async function body；无 require/import，需文件系统/命令行改用 language:"shell"）' },
       queries: { type: 'array', items: { type: 'string' }, description: '同轮检索词（对已入库结果取片段）' },
       language: { type: 'string', enum: ['ts', 'typescript', 'js', 'shell', 'bash'], description: '默认 ts' },
       concurrency: { type: 'number', description: '1-8，默认按 config' },
