@@ -96,7 +96,7 @@ export function registerKnowledgeTools(ctx: { tools: { register(def: unknown): u
       for (const f of files) {
         try {
           deleteByRef(d, f) // replace-on-index：重索引前先删该 ref 旧 chunks，避免 db 随重复索引增长
-          const src = await readFileContents(f, exec) // P1②：读文件内容走 ctx.fs（优先）/ fallback node:fs
+          const src = await readFileContents(f, exec) // P1②：读文件内容只走 ctx.fs（R1-1：无 node:fs 回退，避免绕过宿主文件治理）
           for (const p of chunkMarkdown(src)) { addChunk(d, f, p.title, p.body, ttl); chunks++; bytes += byteLen(p.body) }
         } catch (e) { console.warn('[context-mode] ctx_index 读取失败:', (e as Error).message) } // R5-2（B-08f）：失败留痕
       }
