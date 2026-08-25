@@ -162,7 +162,7 @@ export function apply(ctx: {
     executeDefaultLanguage: config.executeDefaultLanguage,
   })
   // P1-1：注册可软触发的 context-mode skill（DSH skills 可选；缺失降级到 advice 常驻 section）
-  registerSkill(ctx, { enabled: config.routingEnabled, config }) // R4-2：传阈值供 SKILL 文本参数化
+  registerSkill(ctx, { enabled: config.routingEnabled, config: { ...config, searchBudgetBytes: SEARCH_BUDGET_BYTES } }) // R4-2 + P2-3：传阈值/预算供 SKILL 文本参数化（searchBudgetBytes 为非配置常量，显式补传）
   // M3：会话连续性恢复（session-start 监听 + sessionQuery 检索 + agent.inject 注入）
   registerRestore(ctx, {
     config: {

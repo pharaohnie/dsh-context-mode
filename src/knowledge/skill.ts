@@ -97,7 +97,7 @@ export function loadSkillFile(vars: { threshold: number; budget: number } = { th
   }
 }
 
-export interface SkillDeps { enabled: boolean; config?: { maxReadBytesBeforeAsk?: number; searchBudgetBytes?: number } }
+export interface SkillDeps { enabled: boolean; config?: { maxReadDenyBytes?: number; maxReadBytesBeforeAsk?: number; searchBudgetBytes?: number } }
 
 /** 注册 context-mode 软触发 skill（DSH skills 可选；缺失降级）。 */
 export function registerSkill(ctx: { get(name: string): unknown }, deps: SkillDeps) {
@@ -105,7 +105,8 @@ export function registerSkill(ctx: { get(name: string): unknown }, deps: SkillDe
   const skills = ctx.get('skills') as { register?: (skill: unknown) => () => void } | undefined
   if (!skills || typeof skills.register !== 'function') return // 可选服务缺失 → 静默降级
   // 文件优先（单一权威，随插件分发可编辑）；缺失回退硬编码兜底。R4-2：阈值由配置注入。
-  const threshold = deps.config?.maxReadBytesBeforeAsk ?? 51200
+  // P2-3：阈值键名与 SKILL.md 占位符 {{maxReadDenyBytes}} 对齐（旧键 maxReadBytesBeforeAsk 兼容回退）。
+  const threshold = deps.config?.maxReadDenyBytes ?? deps.config?.maxReadBytesBeforeAsk ?? 51200
   const budget = deps.config?.searchBudgetBytes ?? 12000
   const loaded = loadSkillFile({ threshold, budget })
   const description = loaded?.description ?? SKILL_DESCRIPTION
