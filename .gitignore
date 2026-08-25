@@ -22,3 +22,10 @@ coverage/
 # 编辑器
 .idea/
 .vscode/
+
+# 内部审计工作稿（不入库，本地留档）
+COMPLIANCE_REPORT.md
+COMPLIANCE_FIX_PLAN.md
+SANDBOX_CONTRACT_FIX_PLAN.md
+FIX_PLAN_2026-08-25.md
+lifecycle-check-2026-08-25.md
