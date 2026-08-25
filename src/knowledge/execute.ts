@@ -58,18 +58,33 @@ export function sandboxErrorHint(message: string): string {
  *  基础设施/前提失败（shell 不可用/语言不支持/codeRuntime 未挂载）→ throw（框架视为 isError，P1①）。
  *  程序自身失败（CodeRunResult.error；run() 不 reject，error 是结果字段）→ 返回错误文本（这是结果而非基础设施异常）。 */
 export async function runSandbox(ctx: { get(name: string): unknown }, code: string, language?: string, opts: RunSandboxOpts = {}): Promise<{ text: string; count: number }> {
+  // B-02（2026-08-25 修复）：approval 禁用时宿主 policy 可能为 undefined，主动解析默认策略注入，避免 shell/codeRuntime 解构 policy.mode 失败
+  const sandboxPolicy = ctx.get('sandboxPolicy') as { resolve?: (req?: unknown) => unknown; defaultMode?: string } | undefined
+  let resolvedPolicy: unknown = undefined
+  try {
+    if (sandboxPolicy && typeof sandboxPolicy.resolve === 'function') {
+      resolvedPolicy = sandboxPolicy.resolve({})
+    }
+  } catch { /* resolve 失败时保留 undefined，由宿主 fallback 处理 */ }
+  const injectPolicy = (spec: any) => {
+    if (resolvedPolicy !== undefined && spec && typeof spec === 'object') (spec as any).policy = resolvedPolicy
+  }
   const lang = (language || 'ts').toLowerCase()
   if (lang === 'shell' || lang === 'bash') {
     const shell = ctx.get('shell') as { run?: (spec: any) => Promise<any> } | undefined
     if (!shell || typeof shell.run !== 'function') throw new Error('context-mode: shell 服务不可用（DSH 宿主未挂载 shell；executeAllowShell 仅控制本插件是否放行 shell 路由）')
-    const res = await shell.run({ command: code, signal: opts.signal, timeoutMs: opts.timeoutMs || undefined })
+    const spec = { command: code, signal: opts.signal, timeoutMs: opts.timeoutMs || undefined }
+    injectPolicy(spec)
+    const res = await shell.run(spec)
     const out = [res?.stdout, res?.stderr].filter((x) => typeof x === 'string').join('\n')
     return { text: out, count: 1 }
   }
   if (lang !== 'ts' && lang !== 'typescript' && lang !== 'js') throw new Error(`context-mode: 不支持语言 ${lang}（当前支持 ts/typescript/js 与 shell/bash）`)
   const rt = ctx.get('codeRuntime') as { run?: (req: any) => Promise<any> } | undefined
   if (!rt || typeof rt.run !== 'function') throw new Error('context-mode: codeRuntime 未挂载（宿主未提供）')
-  const res = await rt.run({ program: code, bindings: [], signal: opts.signal })
+  const req = { program: code, bindings: [], signal: opts.signal }
+  injectPolicy(req)
+  const res = await rt.run(req)
   if (res?.error) {
     // A2：命中已知模块系统误用时追加改写指引，模型一步自愈
     const hint = sandboxErrorHint(String(res.error.message ?? ''))
