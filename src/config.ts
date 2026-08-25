@@ -167,8 +167,8 @@ export function envConfigOverrides(env: Record<string, string | undefined> = (ty
   if (mem !== undefined) out.memoryCapture = mem
   const sub = bool(['CONTEXT_MODE_SUBAGENT_GUIDANCE'])
   if (sub !== undefined) out.subagentGuidance = sub
-  // 调试开关（显式布尔；语义为「是否开启调试」，无反向）
-  const debug = bool(['CONTEXT_MODE_DEBUG'])
+  // 记账明细开关（新名 CONTEXT_MODE_LEDGER 优先；旧名 CONTEXT_MODE_DEBUG 兼容保留）
+  const debug = bool(['CONTEXT_MODE_LEDGER', 'CONTEXT_MODE_DEBUG'])
   if (debug !== undefined) out.accountingLedger = debug
   return out
 }
