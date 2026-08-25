@@ -35,11 +35,14 @@
     "node": ">=24"
   },
   "dependencies": {
-    "@joplin/turndown-plugin-gfm": "^1.0.67",
-    "turndown": "^7.2.4"
+    "@deepseek-ai/schemastery": "3.18.1",
+    "@joplin/turndown-plugin-gfm": "1.0.67",
+    "turndown": "7.2.4"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-tools": "^0.1.1-rc.2",
-    "@deepseek-ai/schemastery": "*"
+    "@deepseek-ai/dsh-tools": "^0.1.1-rc.2"
+  },
+  "devDependencies": {
+    "@deepseek-ai/dsh-tools": "0.1.1-rc.2"
   }
 }
