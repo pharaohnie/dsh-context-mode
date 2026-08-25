@@ -9,9 +9,10 @@ description: |
   where reading the whole thing into context would flood the window.
   触发短语（中文）：分析/统计/处理/汇总/抽取/过滤/比较/搜索/解析/转换 数据或大文件；看得见的大输出、日志、命中等。
 whenToUse: 需要处理大文件/大输出、做数据统计或摘要、抓取并检索外部文档、或任何会把上下文窗口撑大的读取/命令时。
+# metadata 与 user-invocable 仅供人读；实际注册值以 src/knowledge/skill.ts 硬编码为准
 metadata:
   provider: dsh-context-mode
-  version: 1.0.0
+  version: 0.1.0  # 随 package.json version 同步
 user-invocable: true
 ---
 
@@ -95,8 +96,7 @@ user-invocable: true
 4. **编辑文件用原生 Read**——ctx_* 是分析，不是编辑。
 5. **写文件用原生 Write/Edit**——ctx_execute/ctx_execute_file 的沙箱不持久化到宿主文件系统（资源隔离，非数据沙箱；不承诺程序无法读/写宿主文件）。
 6. **不要重复索引已在上下文的数据**——已加载直接用；要索引先落盘再 `ctx_index(path)`（本插件 `ctx_index` 只接受 `paths`/目录，无 content 参数）。
-7. **不要重复索引已在上下文的数据**——已加载就直接用，或先存文件再索引。
-8. **抓网页用 `ctx_fetch_and_index`，不要 curl/wget**（curl/wget 被门禁硬拦）。
+7. **抓网页用 `ctx_fetch_and_index`，不要 curl/wget**（curl/wget 被门禁硬拦）。
 
 ## 反模式（Anti-Patterns）
 
