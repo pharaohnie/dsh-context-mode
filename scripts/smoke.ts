@@ -5,7 +5,7 @@
 import { createFloodGuard } from '../src/knowledge/flood-guard.ts'
 import { createSchema, chunkStats, addChunk, searchChunks } from '../src/knowledge/sqlite.ts'
 import { buildStructured, buildLean } from '../src/routing/advice.ts'
-import { sandboxErrorHint } from '../src/knowledge/execute.ts'
+import { sandboxErrorHint, runSandbox } from '../src/knowledge/execute.ts'
 import { assertSafeUrl } from '../src/knowledge/web.ts'
 import { collectFiles } from '../src/knowledge/tools.ts'
 import { readFloodDecision } from '../src/routing/gate.ts'
@@ -108,15 +108,17 @@ function check(name: string, cond: boolean, detail = '') {
   check('P5 lean 含层级概要', lean.includes('层级'))
   check('P5 lean 含 ctx_commands 触发词', lean.includes('ctx purge'))
   // A3（2026-08-25）：沙箱契约关键词必须出现在两种引导文本中
-  check('P5 structured 含沙箱契约（require 不可用）', structured.includes('无 require/import'))
+  check('P5 structured 含沙箱契约（require 不可用）', structured.includes('无 require'))
+  check('P5 structured 含 dynamic import 指引', structured.includes('await import'))
   check('P5 structured 含 FILE_SRC 契约', structured.includes('完整内容'))
-  check('P5 lean 含沙箱契约精简版', lean.includes('无 require/import'))
+  check('P5 lean 含沙箱契约精简版', lean.includes('无 require'))
+  check('P5 lean 含 dynamic import 指引', lean.includes('await import'))
 }
 
 // ── A2：sandboxErrorHint（沙箱无模块系统错误的改写指引）──
 {
   const hitRequire = sandboxErrorHint('ReferenceError: require is not defined')
-  check('A2 require 未定义命中', hitRequire.includes('无模块系统'), hitRequire.slice(0, 30))
+  check('A2 require 未定义命中', hitRequire.includes('await import'), hitRequire.slice(0, 40))
   check('A2 Cannot use import statement 命中', sandboxErrorHint('SyntaxError: Cannot use import statement outside a module').length > 0)
   check('A2 module 未定义命中', sandboxErrorHint('ReferenceError: module is not defined').length > 0)
   check('A2 import 未定义命中', sandboxErrorHint('ReferenceError: import is not defined').length > 0)
@@ -125,6 +127,58 @@ function check(name: string, cond: boolean, detail = '') {
   check('A2 空串安全', sandboxErrorHint('') === '')
   check('A2 指引含 FILE_SRC 改写方向', hitRequire.includes('FILE_SRC'))
   check('A2 指引含 shell 逃生口', hitRequire.includes('shell'))
+}
+
+// ── B-02：runSandbox shell 路由须走 shell.resolve + sandboxPolicy ──
+{
+  let resolveCalled = false
+  let runSpec: any = null
+  const mockPolicy = { mode: 'workspace-write' }
+  const ctx = {
+    get(name: string) {
+      if (name === 'shell') {
+        return {
+          resolve(req: any) {
+            resolveCalled = true
+            return { ...req, sandboxPolicy: mockPolicy }
+          },
+          async run(spec: any) {
+            runSpec = spec
+            return { stdout: 'ok' }
+          },
+        }
+      }
+      return undefined
+    },
+  }
+  const res = await runSandbox(ctx, 'echo hi', 'shell')
+  check('B-02 shell.resolve 被调用', resolveCalled)
+  check('B-02 run 收到 sandboxPolicy', runSpec?.sandboxPolicy?.mode === 'workspace-write', JSON.stringify(runSpec?.sandboxPolicy))
+  check('B-02 无 policy 错字段', runSpec?.policy === undefined, JSON.stringify(runSpec))
+  check('B-02 shell 输出', res.text === 'ok', res.text)
+}
+{
+  // fallback：无 shell.resolve 时仍注入 sandboxPolicy（非 policy）
+  let runSpec: any = null
+  const ctx = {
+    get(name: string) {
+      if (name === 'shell') {
+        return {
+          async run(spec: any) {
+            runSpec = spec
+            return { stdout: 'fallback', stderr: '' }
+          },
+        }
+      }
+      if (name === 'sandboxPolicy') {
+        return { defaultMode: 'read-only', resolve: () => ({ mode: 'read-only' }) }
+      }
+      return undefined
+    },
+  }
+  await runSandbox(ctx, 'pwd', 'bash')
+  check('B-02 fallback sandboxPolicy', runSpec?.sandboxPolicy?.mode === 'read-only', JSON.stringify(runSpec))
+  check('B-02 fallback 无 policy 字段', runSpec?.policy === undefined)
 }
 
 // ── P4：envConfigOverrides（依赖 schemastery，不可用则 SKIP 不计失败）──

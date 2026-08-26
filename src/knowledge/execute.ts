@@ -51,30 +51,33 @@ const SANDBOX_MODULE_ERROR = /require is not defined|module is not defined|canno
 /** 命中已知「沙箱无模块系统」错误时返回改写指引，否则返回空串（纯函数，供 smoke 直测）。 */
 export function sandboxErrorHint(message: string): string {
   if (!message || !SANDBOX_MODULE_ERROR.test(message)) return ''
-  return '提示：沙箱无模块系统（require/import 均不可用）。直接使用已注入的变量（如 FILE_SRC，已是文件完整内容字符串）与标准 JS 内置；需要文件系统或命令行请改用 language:"shell" 或原生 bash 工具。'
+  return '提示：沙箱无 require/静态 import。读宿主文件可用 `const fs = await import("node:fs")`（dynamic import）；分析已有内容直接用 FILE_SRC；管道/命令行请改用 language:"shell" 或原生 bash 工具。'
 }
 
 /** 在沙箱里运行一段程序，只回 {text,count}。
  *  基础设施/前提失败（shell 不可用/语言不支持/codeRuntime 未挂载）→ throw（框架视为 isError，P1①）。
  *  程序自身失败（CodeRunResult.error；run() 不 reject，error 是结果字段）→ 返回错误文本（这是结果而非基础设施异常）。 */
 export async function runSandbox(ctx: { get(name: string): unknown }, code: string, language?: string, opts: RunSandboxOpts = {}): Promise<{ text: string; count: number }> {
-  // B-02（2026-08-25 修复）：approval 禁用时宿主 policy 可能为 undefined，主动解析默认策略注入，避免 shell/codeRuntime 解构 policy.mode 失败
-  const sandboxPolicy = ctx.get('sandboxPolicy') as { resolve?: (req?: unknown) => unknown; defaultMode?: string } | undefined
-  let resolvedPolicy: unknown = undefined
-  try {
-    if (sandboxPolicy && typeof sandboxPolicy.resolve === 'function') {
-      resolvedPolicy = sandboxPolicy.resolve({})
-    }
-  } catch { /* resolve 失败时保留 undefined，由宿主 fallback 处理 */ }
-  const injectPolicy = (spec: any) => {
-    if (resolvedPolicy !== undefined && spec && typeof spec === 'object') (spec as any).policy = resolvedPolicy
-  }
   const lang = (language || 'ts').toLowerCase()
   if (lang === 'shell' || lang === 'bash') {
-    const shell = ctx.get('shell') as { run?: (spec: any) => Promise<any> } | undefined
+    const shell = ctx.get('shell') as { run?: (spec: any) => Promise<any>; resolve?: (req: any) => any } | undefined
     if (!shell || typeof shell.run !== 'function') throw new Error('context-mode: shell 服务不可用（DSH 宿主未挂载 shell；executeAllowShell 仅控制本插件是否放行 shell 路由）')
-    const spec = { command: code, signal: opts.signal, timeoutMs: opts.timeoutMs || undefined }
-    injectPolicy(spec)
+    const base = { command: code, signal: opts.signal, timeoutMs: opts.timeoutMs || undefined }
+    // B-02：须走 shell.resolve() 并注入 sandboxPolicy（非 policy）；与 dsh-tool-bash 一致
+    let spec: any
+    if (typeof shell.resolve === 'function') {
+      spec = shell.resolve(base)
+    } else {
+      const sandboxPolicy = ctx.get('sandboxPolicy') as { resolve?: (req?: unknown) => unknown; defaultMode?: string } | undefined
+      let sandboxPolicyResolved: unknown
+      try {
+        if (sandboxPolicy && typeof sandboxPolicy.resolve === 'function') sandboxPolicyResolved = sandboxPolicy.resolve({})
+      } catch { /* resolve 失败时 fallback defaultMode */ }
+      if (sandboxPolicyResolved === undefined && sandboxPolicy?.defaultMode) {
+        sandboxPolicyResolved = { mode: sandboxPolicy.defaultMode }
+      }
+      spec = { ...base, sandboxPolicy: sandboxPolicyResolved }
+    }
     const res = await shell.run(spec)
     const out = [res?.stdout, res?.stderr].filter((x) => typeof x === 'string').join('\n')
     return { text: out, count: 1 }
@@ -83,7 +86,6 @@ export async function runSandbox(ctx: { get(name: string): unknown }, code: stri
   const rt = ctx.get('codeRuntime') as { run?: (req: any) => Promise<any> } | undefined
   if (!rt || typeof rt.run !== 'function') throw new Error('context-mode: codeRuntime 未挂载（宿主未提供）')
   const req = { program: code, bindings: [], signal: opts.signal }
-  injectPolicy(req)
   const res = await rt.run(req)
   if (res?.error) {
     // A2：命中已知模块系统误用时追加改写指引，模型一步自愈

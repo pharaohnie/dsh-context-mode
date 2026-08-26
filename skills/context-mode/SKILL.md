@@ -74,11 +74,11 @@ user-invocable: true
 | HTTP/API 调用、JSON | `ts`/`js` | 原生 fetch、JSON.parse、async/await |
 | 数据分析、CSV、统计 | `ts`/`js` | 原生 JSON/数组方法 |
 | 管道命令（grep/awk/jq） | `shell` | 默认开启 `executeAllowShell`（关闭时改用 ts 或 ctx_fetch_and_index） |
-| 需要 fs / npm 模块 / 命令行 | `shell` | ts/js 沙箱**无模块系统**（无 require/import），文件系统需求走 shell |
+| 读宿主文件系统 / npm 模块 | `ts`/`js` | 用 `const fs = await import("node:fs")`（无 require/静态 import）；管道命令仍走 `shell` |
 
 > 注：`ctx_execute` 的 shell 路由**默认开启**（`executeAllowShell=true`）。当该开关被显式设为 false 时，shell 代码会被拒绝，此时改用 `ts` 或 `ctx_fetch_and_index`。
 >
-> **沙箱契约**：`code` 是 async function body（顶层 await/return 可用），**无 require/import/模块系统**，可用标准 JS 内置 + console.log；`ctx_execute_file` 的 `FILE_SRC` 是文件**完整内容（string）**，不要再读文件、不要当路径用。
+> **沙箱契约**：`code` 是 async function body（顶层 await/return 可用），**无 require/静态 import**；读宿主文件用 **`await import("node:fs")`**；`ctx_execute_file` 的 `FILE_SRC` 是文件**完整内容（string）**，不要再读文件、不要当路径用。
 
 ## 搜索策略（ctx_search）
 
@@ -107,7 +107,7 @@ user-invocable: true
 - 把 MCP/工具响应再喂给 `ctx_index` 的路径 → 上下文翻倍；已加载直接用或先落盘再索引。
 - 忽略 `browser_snapshot` 等大输出工具 → 其输出可能 100K+ token；存文件 → `ctx_index(path)` → `ctx_search`。
 - 把 `ctx_stats` 当能重置的工具 → 它只读；清库用 `ctx_purge`。
-- 在 code 里写 `require("node:fs")` / `import fs` → 沙箱无模块系统，直接 `ReferenceError`。FILE_SRC 已是文件完整内容，直接处理；要文件系统/命令行走 `language:"shell"`。
+- 在 code 里写 `require("node:fs")` / `import fs from "node:fs"` → 沙箱无 require/静态 import（`ReferenceError`）。读宿主文件改用 **`const fs = await import("node:fs")`**；分析已有内容直接用 FILE_SRC；管道/命令行走 `language:"shell"`。
 
 ## 会话恢复
 

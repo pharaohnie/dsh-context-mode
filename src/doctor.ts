@@ -66,21 +66,25 @@ export function registerDoctor(ctx: { tools: { register(def: unknown): unknown }
       report('Node 全局（fetch/setTimeout/AbortController）',
         typeof fetch === 'function' && typeof setTimeout === 'function' && typeof AbortController === 'function',
         `fetch=${typeof fetch === 'function'} setTimeout=${typeof setTimeout === 'function'} AbortController=${typeof AbortController === 'function'}`)
-      // 3b 方案 B：node_modules symlink 健康检查。
-      // peerDeps（@deepseek-ai/dsh-tools 等）的运行时解析依赖插件目录内指向 DSH 安装的 node_modules symlink
+      // 3b 方案 B：node_modules 健康检查（symlink 指向 DSH 安装，或 pnpm 实体目录已装齐 peerDeps）。
+      // peerDeps（@deepseek-ai/dsh-tools 等）的运行时解析依赖插件目录内可解析的 node_modules
       // （Node ESM 对模块路径 realpath，profile 逻辑路径不可达）；DSH 经 npx 更新后 symlink 会指向旧缓存而断链。
       try {
         const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
         const nm = path.join(root, 'node_modules')
+        const toolsPkg = path.join(nm, '@deepseek-ai', 'dsh-tools', 'package.json')
+        const toolsOk = existsSync(toolsPkg)
         const st = lstatSync(nm, { throwIfNoEntry: false })
         if (st && st.isSymbolicLink()) {
           const target = readlinkSync(nm)
-          const toolsOk = existsSync(path.join(nm, '@deepseek-ai', 'dsh-tools', 'package.json'))
           report('node_modules symlink（peerDeps 解析）', toolsOk,
             `-> ${target}${toolsOk ? '' : '（目标缺 @deepseek-ai/dsh-tools：跑 relink-dsh-context-mode.sh）'}`)
+        } else if (st && st.isDirectory() && toolsOk) {
+          report('node_modules symlink（peerDeps 解析）', true,
+            'pnpm/实体目录（@deepseek-ai/dsh-tools 已就绪；symlink 可选，跑 relink-dsh-context-mode.sh 可切换）')
         } else {
           report('node_modules symlink（peerDeps 解析）', false,
-            '缺失（非符号链接或不存在）：跑 relink-dsh-context-mode.sh 重建')
+            toolsOk ? '目录存在但形态异常' : '缺失或缺 @deepseek-ai/dsh-tools：pnpm install 或跑 relink-dsh-context-mode.sh')
         }
       } catch (e) {
         report('node_modules symlink（peerDeps 解析）', false, String((e as Error).message))
