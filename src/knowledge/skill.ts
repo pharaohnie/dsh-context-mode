@@ -100,7 +100,10 @@ export function loadSkillFile(vars: { threshold: number; budget: number } = { th
 export interface SkillDeps { enabled: boolean; config?: { maxReadDenyBytes?: number; maxReadBytesBeforeAsk?: number; searchBudgetBytes?: number } }
 
 /** 注册 context-mode 软触发 skill（DSH skills 可选；缺失降级）。 */
-export function registerSkill(ctx: { get(name: string): unknown }, deps: SkillDeps) {
+export function registerSkill(
+  ctx: { get(name: string): unknown; effect?: (fn: () => (() => void) | void) => unknown },
+  deps: SkillDeps,
+) {
   if (!deps.enabled) return
   const skills = ctx.get('skills') as { register?: (skill: unknown) => () => void } | undefined
   if (!skills || typeof skills.register !== 'function') return // 可选服务缺失 → 静默降级
@@ -113,7 +116,7 @@ export function registerSkill(ctx: { get(name: string): unknown }, deps: SkillDe
   const whenToUse = loaded?.whenToUse ?? '把大文件/大输出换成索引+检索、把数据处理换成沙箱计算时（Think-in-Code），避免上下文洪水。'
   const content = loaded?.body ?? buildSkillBody(threshold)
   try {
-    skills.register({
+    const dispose = skills.register({
       name: 'context-mode',
       description,
       whenToUse,
@@ -123,5 +126,9 @@ export function registerSkill(ctx: { get(name: string): unknown }, deps: SkillDe
       invocation: { modelInvocable: true, userInvocable: true },
       provider: 'dsh-context-mode',
     })
+    // skills.register 返回 disposer（dsh-skill API）；经 ctx.effect 挂到 fiber 生命周期，卸载时自动注销。
+    if (typeof dispose === 'function' && typeof ctx.effect === 'function') {
+      ctx.effect(() => dispose)
+    }
   } catch { /* 注册失败忽略（可能同名；advice.ts 常驻 section 仍是兜底） */ }
 }
